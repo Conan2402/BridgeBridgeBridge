@@ -27,6 +27,18 @@ class MinecraftManager extends CommunicationBridge {
     global.bot = this.createBotConnection();
     this.bot = bot;
 
+    this.bot._client.on("state", (newState) => {
+      if (newState === "configuration") {
+        setImmediate(() => {
+          try {
+            this.bot._client.write("finish_configuration", {});
+          } catch (error) {
+            console.warn("Failed to manually finish configuration", error);
+          }
+        });
+      }
+    });
+
     this.errorHandler.registerEvents(this.bot);
     this.stateHandler.registerEvents(this.bot);
     this.chatHandler.registerEvents(this.bot);
@@ -43,17 +55,47 @@ class MinecraftManager extends CommunicationBridge {
     return mineflayer.createBot({
       host: "mc.hypixel.net",
       port: 25565,
+      username: "goblinappel",
       auth: "microsoft",
       version: "1.21.11",
-      viewDistance: "tiny",
-      chatLengthLimit: 256,
-      profilesFolder: "./auth-cache"
+      profilesFolder: "./auth-cache",
+      plugins: {
+        blocks: false,
+        physics: false,
+        inventory: false,
+        simple_inventory: false,
+        entities: false,
+        painting: false,
+        digging: false,
+        collectBlock: false,
+        craft: false,
+        chest: false,
+        furnace: false,
+        enchantment_table: false,
+        villager: false,
+        bed: false,
+        rain: false,
+        ray_trace: false,
+        sound: false,
+        experience: false,
+        health: false,
+        breath: false,
+        boss_bar: false,
+        scoreBoard: false,
+        book: false,
+        command_block: false,
+        tablist: false,
+        time: false,
+        title: false,
+        game: false
+      }
     });
   }
 
   async onBroadcast({ channel, username, message, replyingTo, discord }) {
     console.broadcast(`${username}: ${message}`, "Minecraft");
-    if (this.bot.player === undefined) {
+
+    if (!this.bot || !this.bot._client || this.bot._client.state !== "play") {
       return;
     }
 
@@ -106,7 +148,7 @@ class MinecraftManager extends CommunicationBridge {
       }
 
       discord.react("❌");
-    }, 500);
+    }, 3000);
   }
 }
 

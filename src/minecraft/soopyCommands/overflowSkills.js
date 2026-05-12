@@ -10,16 +10,16 @@ const BASE_STEP_CURVE_1_TO_60 = [
 ];
 
 const SKILLS_FOR_AVERAGE = [
-"alchemy",
-"carpentry",
-"combat",
-"enchanting",
-"farming",
-"fishing",
-"foraging",
-"hunting",
-"mining",
-"taming"
+  "alchemy",
+  "carpentry",
+  "combat",
+  "enchanting",
+  "farming",
+  "fishing",
+  "foraging",
+  "hunting",
+  "mining",
+  "taming"
 ];
 
 const BASE_CAPS = {
@@ -39,6 +39,12 @@ function sanitizeNumber(value) {
   const number = Number(value);
 
   return Number.isFinite(number) ? number : 0;
+}
+
+function formatTo2(value) {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number.toFixed(2) : "0.00";
 }
 
 function normalizeXpTableToStepCurve(table) {
@@ -179,14 +185,15 @@ function calculateOverflowSkillLevel(currentXP, skillCap, stepCurve) {
   const xpNeededForLevel60 = xpRequiredForLevel(stepCurve, 60);
 
   if (xpTotal >= xpNeededForLevel60) {
-    const overflow = overflowXPAbove60ToAbsLevelFloat(xpTotal);
+    const overflowXP = xpTotal - xpNeededForLevel60;
+    const overflow = overflowXPAbove60ToAbsLevelFloat(overflowXP);
 
     return {
       level: Math.floor(overflow.levelWithProgress),
       levelWithProgress: overflow.levelWithProgress,
       current: overflow.current,
       needed: overflow.needed,
-      overflowTotal: xpTotal
+      overflowTotal: overflowXP
     };
   }
 
@@ -217,11 +224,13 @@ function getOverflowSkills(profile) {
     const xp = sanitizeNumber(experience[xpKey]);
     const stepCurve = getStepCurve(skill);
     const cap = getCapForSkill(profile, skill);
+    const calculated = calculateOverflowSkillLevel(xp, cap, stepCurve);
 
     result[skill] = {
       xp,
       cap,
-      ...calculateOverflowSkillLevel(xp, cap, stepCurve)
+      ...calculated,
+      levelWithProgress: formatTo2(calculated.levelWithProgress)
     };
   }
 
@@ -230,14 +239,16 @@ function getOverflowSkills(profile) {
 
 function getOverflowSkillAverage(overflowSkills) {
   const levels = Object.values(overflowSkills)
-    .map((skill) => skill.levelWithProgress)
-    .filter((level) => typeof level === "number" && Number.isFinite(level));
+    .map((skill) => Number(skill.levelWithProgress))
+    .filter((level) => Number.isFinite(level));
 
   if (levels.length === 0) {
-    return 0;
+    return "0.00";
   }
 
-  return levels.reduce((total, level) => total + level, 0) / levels.length;
+  const average = levels.reduce((total, level) => total + level, 0) / levels.length;
+
+  return formatTo2(average);
 }
 
 module.exports = {
