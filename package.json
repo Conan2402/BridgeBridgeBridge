@@ -56,7 +56,7 @@
     "skyhelper-networth": "^2.7.0",
     "util": "^0.12.5",
     "winston": "^3.19.0",
-    "ws": "^8.19.0"
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "eslint": "^8.43.0",
