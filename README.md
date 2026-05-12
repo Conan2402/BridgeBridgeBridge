@@ -62,7 +62,7 @@ In here we are going to clone the repository, set up the configuration file, vol
 
 - Clone the repository and enter the directory:
 
-      git clone https://github.com/DuckySoLucky/hypixel-discord-chat-bridge.git
+      git clone https://github.com/Conan2402/BridgeBridgeBridge
       cd hypixel-discord-chat-bridge
 
 - Configure the volume directories in /opt/ as `root`:
