@@ -32,7 +32,7 @@ that went into it. Thank you!
 
 To get started, clone down the repository using:
 
-    git clone https://github.com/DuckySoLucky/hypixel-discord-chat-bridge.git
+    git clone https://github.com/Conan2402/BridgeBridgeBridge
 
 Next go into the `hypixel-discord-chat-bridge` folder and install all the dependencies using NPM.
 
