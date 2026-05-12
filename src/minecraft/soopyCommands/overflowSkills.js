@@ -10,16 +10,16 @@ const BASE_STEP_CURVE_1_TO_60 = [
 ];
 
 const SKILLS_FOR_AVERAGE = [
-  "farming",
-  "mining",
-  "combat",
-  "foraging",
-  "fishing",
-  "enchanting",
-  "alchemy",
-  "taming",
-  "carpentry",
-  "hunting"
+"alchemy",
+"carpentry",
+"combat",
+"enchanting",
+"farming",
+"fishing",
+"foraging",
+"hunting",
+"mining",
+"taming"
 ];
 
 const BASE_CAPS = {
