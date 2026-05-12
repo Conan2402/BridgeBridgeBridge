@@ -1,0 +1,17 @@
+node_modules
+.git
+.idea
+.vscode
+npm-debug.log
+Dockerfile
+.dockerignore
+README.md
+
+data
+auth-cache
+config.json
+messages.json
+
+*.log
+*.tmp
+.DS_Store
