@@ -7,7 +7,8 @@
     },
     "commands": {
       "normal": true,
-      "soopy": true
+      "soopy": true,
+      "soopyCommands": true
     },
     "fragBot": {
       "enabled": true,
