@@ -1,5 +1,5 @@
 # define base image
-FROM node:21.6.1-bullseye-slim
+FROM node:22-bookworm-slim
 
 # download dumb-init
 RUN apt-get update && apt-get install -y --no-install-recommends dumb-init

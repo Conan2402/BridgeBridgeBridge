@@ -1,4 +1,5 @@
 const { Collection } = require("discord.js");
+const SoopyCommandHandler = require("./soopyCommands/SoopyCommandHandler.js");
 const config = require("../../config.json");
 const axios = require("axios");
 const fs = require("fs");
@@ -10,6 +11,7 @@ class CommandHandler {
 
     this.prefix = config.minecraft.bot.prefix;
     this.commands = new Collection();
+    this.soopyCommands = new SoopyCommandHandler(minecraft);
 
     const commandFiles = fs.readdirSync("./src/minecraft/commands").filter((file) => file.endsWith(".js"));
     for (const file of commandFiles) {
@@ -37,7 +39,19 @@ class CommandHandler {
       command.officer = officer;
       command.onCommand(player, message);
     } else if (message.startsWith("-") && message.startsWith("- ") === false) {
-      if (config.minecraft.commands.soopy === false || message.at(1) === "-") {
+      if (message.at(1) === "-") {
+        return;
+      }
+
+      if (config.minecraft.commands.soopyCommands === true) {
+        const handled = this.soopyCommands.handle(player, message, officer);
+
+        if (handled === true) {
+          return;
+        }
+      }
+
+      if (config.minecraft.commands.soopy === false) {
         return;
       }
 

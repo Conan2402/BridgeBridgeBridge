@@ -44,7 +44,7 @@ class MinecraftManager extends CommunicationBridge {
       host: "mc.hypixel.net",
       port: 25565,
       auth: "microsoft",
-      version: "1.8.9",
+      version: "1.21.11",
       viewDistance: "tiny",
       chatLengthLimit: 256,
       profilesFolder: "./auth-cache"
