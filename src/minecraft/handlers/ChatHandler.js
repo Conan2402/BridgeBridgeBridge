@@ -578,15 +578,25 @@ class StateHandler extends eventHandler {
 
     const match = (config.discord.other.messageMode === "minecraft" ? colouredMessage : message).match(regex);
 
-    if (!match) {
-      return;
-    }
+        if (!match) {
+          return;
+        }
+
+        const clean = (value) =>
+          String(value ?? "")
+            .replace(/§[0-9a-fk-or]/gi, "")
+            .trim()
+            .toLowerCase();
+
+        if (
+          clean(match.groups.message).includes("replying to") &&
+          global.replyBridgeEchoCache?.has(clean(match.groups.message))
+        ) {
+          return;
+        }
 
     if (this.isDiscordMessage(match.groups.message) === false) {
       const { chatType, rank, username, guildRank = "[Member]", message } = match.groups;
-      if (message.includes("replying to") && username === this.bot.username) {
-        return;
-      }
 
       this.minecraft.broadcastMessage({
         fullMessage: colouredMessage,

@@ -125,8 +125,20 @@ class MinecraftManager extends CommunicationBridge {
 
     if (replyingTo) {
       message = message.replace(username, `${username} replying to ${replyingTo}`);
-    }
 
+      const clean = (value) =>
+        String(value ?? "")
+          .replace(/§[0-9a-fk-or]/gi, "")
+          .trim()
+          .toLowerCase();
+
+      global.replyBridgeEchoCache ??= new Set();
+      global.replyBridgeEchoCache.add(clean(message));
+
+      setTimeout(() => {
+        global.replyBridgeEchoCache.delete(clean(message));
+      }, 15000);
+    }
     let successfullySent = false;
     const messageListener = (receivedMessage) => {
       receivedMessage = receivedMessage.toString();
