@@ -29,6 +29,10 @@ function formatNumber(number) {
   return Math.floor(Number(number) || 0).toLocaleString("en-US");
 }
 
+function getHelpText() {
+  return "Leaderboard options - points, won, lost, gambled, wins, losses. Default: points.";
+}
+
 class LeaderboardCommand extends minecraftCommand {
   /** @param {import("minecraft-protocol").Client} minecraft */
   constructor(minecraft) {
@@ -85,8 +89,12 @@ class LeaderboardCommand extends minecraftCommand {
         }
       };
 
+      if (type === "help") {
+        return this.send(getHelpText());
+      }
+
       if (!types[type]) {
-        throw "Usage: !leaderboard [points|won|lost|gambled|wins|losses]";
+        return this.send(getHelpText());
       }
 
       const selected = types[type];
