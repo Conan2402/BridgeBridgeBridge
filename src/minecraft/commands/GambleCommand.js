@@ -10,7 +10,7 @@ const config = require("../../../config.json");
 const DATA_DIR = path.join(process.cwd(), "data");
 const DATA_FILE = path.join(DATA_DIR, "gamble.json");
 
-const GAMBLE_SETTINGS = {
+const DEFAULT_GAMBLE_SETTINGS = {
   enabled: true,
 
   // Guild experience to points ratio
@@ -26,6 +26,35 @@ const GAMBLE_SETTINGS = {
 
   giveInitialWeeklyXp: true
 };
+
+const GAMBLE_SETTINGS = {
+  ...DEFAULT_GAMBLE_SETTINGS,
+  ...(config.minecraft?.gambling || {})
+};
+
+GAMBLE_SETTINGS.enabled = GAMBLE_SETTINGS.enabled !== false;
+GAMBLE_SETTINGS.xpToPointRatio = Math.max(1, Number(GAMBLE_SETTINGS.xpToPointRatio) || 1);
+GAMBLE_SETTINGS.minBet = Math.max(1, Math.floor(Number(GAMBLE_SETTINGS.minBet) || 1));
+GAMBLE_SETTINGS.maxBet = Math.max(
+  GAMBLE_SETTINGS.minBet,
+  Math.floor(Number(GAMBLE_SETTINGS.maxBet) || 1_000_000)
+);
+GAMBLE_SETTINGS.winChance = Math.max(
+  0,
+  Math.min(
+    1,
+    Number.isFinite(Number(GAMBLE_SETTINGS.winChance))
+      ? Number(GAMBLE_SETTINGS.winChance)
+      : 0.45
+  )
+);
+GAMBLE_SETTINGS.winMultiplier = Math.max(1, Number(GAMBLE_SETTINGS.winMultiplier) || 2);
+GAMBLE_SETTINGS.cooldownSeconds = Math.max(0, Number(GAMBLE_SETTINGS.cooldownSeconds) || 0);
+GAMBLE_SETTINGS.giveInitialWeeklyXp = GAMBLE_SETTINGS.giveInitialWeeklyXp === true;
+
+function getUsage() {
+  return "Gamble usage - use an amount, a percentage, or all. Examples: 100, 50%, all.";
+}
 
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -66,23 +95,36 @@ function formatNumber(number) {
 }
 
 function parseBet(input, points) {
-  if (!input) {
-    throw "Usage: !gamble <amount | amount% | all>";
+  if (typeof input !== "string" || input.trim().length === 0) {
+    throw getUsage();
   }
 
-  const raw = input.toLowerCase();
+  const raw = input.trim().toLowerCase();
 
   if (raw === "all") {
-    return points;
+    return Math.floor(Number(points || 0));
   }
 
   if (raw.endsWith("%")) {
-    const percent = Number(raw.slice(0, -1));
+    const percentText = raw.slice(0, -1).replace(/,/g, "");
+    const percent = Number(percentText);
 
-    return Math.floor(points * (percent / 100));
+    if (!Number.isFinite(percent)) {
+      throw "Percentage must be a valid number.";
+    }
+
+    if (percent <= 0 || percent > 100) {
+      throw "Percentage must be between 1% and 100%.";
+    }
+
+    return Math.floor(Number(points || 0) * (percent / 100));
   }
 
   const amount = Number(raw.replace(/,/g, ""));
+
+  if (!Number.isFinite(amount)) {
+    throw "Bet must be a valid number.";
+  }
 
   return Math.floor(amount);
 }
@@ -109,12 +151,16 @@ class GambleCommand extends minecraftCommand {
    * @param {string} message
    */
   async onCommand(player, message) {
-    if (config.minecraft.gambling?.enabled === false || !GAMBLE_SETTINGS.enabled) {
+    if (!GAMBLE_SETTINGS.enabled) {
       return this.send("Gambling is currently disabled.");
     }
 
     const args = this.getArgs(message);
     const betInput = args[0];
+
+    if (!betInput) {
+      return this.send(getUsage());
+    }
 
     try {
       const [uuid, guild] = await Promise.all([
@@ -172,19 +218,23 @@ class GambleCommand extends minecraftCommand {
       }
 
       const earnedGuildXp = Math.max(0, currentGuildXp - Number(profile.lastGuildXp || 0));
-      const ratio = Math.max(1, Number(GAMBLE_SETTINGS.xpToPointRatio || 1));
-      const earnedPoints = Math.floor(earnedGuildXp / ratio);
+      const earnedPoints = Math.floor(earnedGuildXp / GAMBLE_SETTINGS.xpToPointRatio);
 
       if (earnedPoints > 0) {
         profile.points = Number(profile.points || 0) + earnedPoints;
         profile.totalEarnedPoints = Number(profile.totalEarnedPoints || 0) + earnedPoints;
 
         // Keeps leftover XP if xpToPointRatio > 1.
-        profile.lastGuildXp = Number(profile.lastGuildXp || 0) + earnedPoints * ratio;
+        profile.lastGuildXp =
+          Number(profile.lastGuildXp || 0) + earnedPoints * GAMBLE_SETTINGS.xpToPointRatio;
       }
 
       const currentPoints = Math.floor(Number(profile.points || 0));
       const bet = parseBet(betInput, currentPoints);
+
+      if (bet <= 0) {
+        throw "You do not have enough points to gamble.";
+      }
 
       if (bet < GAMBLE_SETTINGS.minBet) {
         throw `Minimum bet is ${formatNumber(GAMBLE_SETTINGS.minBet)} points.`;
@@ -196,10 +246,6 @@ class GambleCommand extends minecraftCommand {
 
       if (bet > currentPoints) {
         throw `You only have ${formatNumber(currentPoints)} points.`;
-      }
-
-      if (bet <= 0) {
-        throw "You do not have enough points to gamble.";
       }
 
       const won = Math.random() < GAMBLE_SETTINGS.winChance;
