@@ -5,6 +5,18 @@
       "messageFormat": "{username} » {message}",
       "messageRepeatBypassLength": 24
     },
+
+    "gambling": {
+      "enabled": true,
+      "xpToPointRatio": 1,
+      "minBet": 1,
+      "maxBet": 1000000,
+      "winChance": 0.45,
+      "winMultiplier": 2,
+      "cooldownSeconds": 10,
+      "giveInitialWeeklyXp": true
+    },
+
     "commands": {
       "normal": true,
       "soopy": true,
