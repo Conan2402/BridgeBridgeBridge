@@ -1,5 +1,6 @@
 const config = require("../../../config.json");
 const { unemojify } = require("node-emoji");
+const verifiedAccountManager = require("../../contracts/verifiedAccountManager.js");
 
 class MessageHandler {
   constructor(discord, command) {
@@ -24,7 +25,16 @@ class MessageHandler {
         return;
       }
 
-      const username = message.member.displayName ?? message.author.username;
+      const isMinecraftCommand =
+        content.startsWith(config.minecraft.bot.prefix) ||
+        (content.startsWith("-") && content.startsWith("- ") === false);
+
+      const verifiedAccount = isMinecraftCommand
+        ? verifiedAccountManager.getByDiscordId(message.author.id)
+        : null;
+
+      const username = verifiedAccount?.username ?? message.member.displayName ?? message.author.username;
+
       if (username === undefined || username.length === 0) {
         return;
       }
@@ -124,12 +134,16 @@ class MessageHandler {
       })
       .join("");
 
-    const hasMentions = /<@|<#|<:|<a:/.test(message);
+    const hasMentions = /<@|<#|<:|<a:/.test(message.content);
     if (hasMentions) {
       // Replace <@486155512568741900> with @DuckySoLucky
       const userMentionPattern = /<@(\d+)>/g;
       const replaceUserMention = (match, mentionedUserId) => {
         const mentionedUser = message.guild.members.cache.get(mentionedUserId);
+
+        if (!mentionedUser) {
+          return match;
+        }
 
         return `@${mentionedUser.displayName}`;
       };
@@ -139,6 +153,10 @@ class MessageHandler {
       const channelMentionPattern = /<#(\d+)>/g;
       const replaceChannelMention = (match, mentionedChannelId) => {
         const mentionedChannel = message.guild.channels.cache.get(mentionedChannelId);
+
+        if (!mentionedChannel) {
+          return match;
+        }
 
         return `#${mentionedChannel.name}`;
       };

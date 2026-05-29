@@ -3,9 +3,49 @@ const HypixelDiscordChatBridgeError = require("../../contracts/errorHandler.js")
 const hypixelRebornAPI = require("../../contracts/API/HypixelRebornAPI.js");
 const { formatError } = require("../../contracts/helperFunctions.js");
 const updateRolesCommand = require("./updateCommand.js");
-const { writeFileSync, readFileSync } = require("fs");
+const { existsSync, mkdirSync, writeFileSync, readFileSync } = require("fs");
 const config = require("../../../config.json");
 const { MessageFlags, SlashCommandBuilder } = require("discord.js");
+const verifiedAccountManager = require("../../contracts/verifiedAccountManager.js");
+
+const LINKED_FILE = "data/linked.json";
+
+function ensureLinkedFile() {
+  if (!existsSync("data")) {
+    mkdirSync("data", { recursive: true });
+  }
+
+  if (!existsSync(LINKED_FILE)) {
+    writeFileSync(LINKED_FILE, JSON.stringify({}, null, 2));
+  }
+}
+
+function readLinkedData() {
+  ensureLinkedFile();
+
+  const linkedData = readFileSync(LINKED_FILE);
+
+  if (!linkedData) {
+    throw new HypixelDiscordChatBridgeError("The linked data file does not exist. Please contact an administrator.");
+  }
+
+  const linked = JSON.parse(linkedData.toString("utf8"));
+
+  if (!linked || typeof linked !== "object" || Array.isArray(linked)) {
+    throw new HypixelDiscordChatBridgeError("The linked data file is malformed. Please contact an administrator.");
+  }
+
+  return linked;
+}
+
+function shouldRunRoleUpdater() {
+  return (
+    config.verification.nickname.enabled ||
+    config.verification.roles.verified.enabled ||
+    config.verification.roles.guildMember.enabled ||
+    config.verification.roles.custom.length > 0
+  );
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -17,19 +57,14 @@ module.exports = {
 
   execute: async (interaction, extra = {}) => {
     try {
-      const linkedData = readFileSync("data/linked.json");
-      if (!linkedData) {
-        throw new HypixelDiscordChatBridgeError("The linked data file does not exist. Please contact an administrator.");
-      }
+      const linked = readLinkedData();
 
-      const linked = JSON.parse(linkedData.toString("utf8"));
-      if (!linked) {
-        throw new HypixelDiscordChatBridgeError("The linked data file is malformed. Please contact an administrator.");
-      }
+      if (config.verification.roles.verified.enabled) {
+        const linkedRole = guild.roles.cache.get(config.verification.roles.verified.roleId);
 
-      const linkedRole = guild.roles.cache.get(config.verification.roles.verified.roleId);
-      if (!linkedRole) {
-        throw new HypixelDiscordChatBridgeError("The verified role does not exist. Please contact an administrator.");
+        if (!linkedRole) {
+          throw new HypixelDiscordChatBridgeError("The verified role does not exist. Please contact an administrator.");
+        }
       }
 
       const username = interaction.options.getString("username");
@@ -40,14 +75,17 @@ module.exports = {
         throw new HypixelDiscordChatBridgeError(`The player '${nickname}' has not linked their Discord account. Please follow the instructions below.`);
       }
 
-      if (discordUsername.toLowerCase() !== interaction.user.username) {
+      if (discordUsername.toLowerCase() !== interaction.user.username.toLowerCase()) {
         throw new HypixelDiscordChatBridgeError(
           `The player '${nickname}' has linked their Discord account to a different account ('${discordUsername}'). Please follow the instructions below.`
         );
       }
 
-      linked[uuid] = interaction.user.id;
-      writeFileSync("data/linked.json", JSON.stringify(linked, null, 2));
+      verifiedAccountManager.setVerifiedAccount({
+        uuid,
+        discordUser: interaction.user,
+        username: nickname
+      });
 
       const embed = new SuccessEmbed(`${extra.user ? `<@${extra.user.id}>'s` : "Your"} account has been successfully linked to \`${nickname}\``)
         .setAuthor({ name: "Successfully linked!" })
@@ -58,7 +96,9 @@ module.exports = {
 
       await interaction.editReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 
-      await updateRolesCommand.execute(interaction);
+      if (shouldRunRoleUpdater()) {
+        await updateRolesCommand.execute(interaction);
+      }
     } catch (error) {
       console.error(error);
       // eslint-disable-next-line no-ex-assign
