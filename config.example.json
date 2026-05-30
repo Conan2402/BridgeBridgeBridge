@@ -12,9 +12,7 @@
       "minBet": 1,
       "maxBet": 1000000,
       "winChance": 0.45,
-      "winMultiplier": 2,
-      "cooldownSeconds": 10,
-      "giveInitialWeeklyXp": true
+      "cooldownSeconds": 10
     },
 
     "commands": {

@@ -12,20 +12,7 @@ const DATA_FILE = path.join(DATA_DIR, "gamble.json");
 
 const DEFAULT_GAMBLE_SETTINGS = {
   enabled: true,
-
-  // Guild experience to points ratio
   xpToPointRatio: 1,
-
-  minBet: 1,
-  maxBet: 100_000_000,
-
-  winChance: 0.45,
-  winMultiplier: 2,
-
-  cooldownSeconds: 10,
-
-  // Initial load only:
-  // true = first registration grants current weekly guild XP as starting points.
   giveInitialWeeklyXp: true
 };
 
@@ -36,27 +23,7 @@ const GAMBLE_SETTINGS = {
 
 GAMBLE_SETTINGS.enabled = GAMBLE_SETTINGS.enabled !== false;
 GAMBLE_SETTINGS.xpToPointRatio = Math.max(1, Number(GAMBLE_SETTINGS.xpToPointRatio) || 1);
-GAMBLE_SETTINGS.minBet = Math.max(1, Math.floor(Number(GAMBLE_SETTINGS.minBet) || 1));
-GAMBLE_SETTINGS.maxBet = Math.max(
-  GAMBLE_SETTINGS.minBet,
-  Math.floor(Number(GAMBLE_SETTINGS.maxBet) || DEFAULT_GAMBLE_SETTINGS.maxBet)
-);
-GAMBLE_SETTINGS.winChance = Math.max(
-  0,
-  Math.min(
-    1,
-    Number.isFinite(Number(GAMBLE_SETTINGS.winChance))
-      ? Number(GAMBLE_SETTINGS.winChance)
-      : DEFAULT_GAMBLE_SETTINGS.winChance
-  )
-);
-GAMBLE_SETTINGS.winMultiplier = Math.max(1, Number(GAMBLE_SETTINGS.winMultiplier) || 2);
-GAMBLE_SETTINGS.cooldownSeconds = Math.max(0, Number(GAMBLE_SETTINGS.cooldownSeconds) || 0);
 GAMBLE_SETTINGS.giveInitialWeeklyXp = GAMBLE_SETTINGS.giveInitialWeeklyXp === true;
-
-function getUsage() {
-  return "Gamble usage - use an amount, k, m, a percentage, or all. Examples: 100, 250k, 1.5m, 50%, all.";
-}
 
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -99,69 +66,6 @@ function formatNumber(number) {
 function normalizeXpNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
-}
-
-function parseCompactNumber(input) {
-  if (typeof input !== "string") {
-    return NaN;
-  }
-
-  const raw = input.trim().toLowerCase().replace(/,/g, "");
-  const match = raw.match(/^(\d+(?:\.\d+)?)([km])?$/);
-
-  if (!match) {
-    return NaN;
-  }
-
-  const value = Number(match[1]);
-
-  if (!Number.isFinite(value)) {
-    return NaN;
-  }
-
-  if (match[2] === "k") {
-    return value * 1_000;
-  }
-
-  if (match[2] === "m") {
-    return value * 1_000_000;
-  }
-
-  return value;
-}
-
-function parseBet(input, points) {
-  if (typeof input !== "string" || input.trim().length === 0) {
-    throw getUsage();
-  }
-
-  const raw = input.trim().toLowerCase();
-
-  if (raw === "all") {
-    return Math.floor(Number(points || 0));
-  }
-
-  if (raw.endsWith("%")) {
-    const percent = Number(raw.slice(0, -1).replace(/,/g, ""));
-
-    if (!Number.isFinite(percent)) {
-      throw "Percentage must be a valid number.";
-    }
-
-    if (percent <= 0 || percent > 100) {
-      throw "Percentage must be between 1% and 100%.";
-    }
-
-    return Math.floor(Number(points || 0) * (percent / 100));
-  }
-
-  const amount = parseCompactNumber(raw);
-
-  if (!Number.isFinite(amount)) {
-    throw "Bet must be a valid number. Examples: 100, 250k, 1.5m, 50%, all.";
-  }
-
-  return Math.floor(amount);
 }
 
 function looksLikeDailyExpHistory(value) {
@@ -452,37 +356,23 @@ function updatePointsFromDailyExp(profile, dailyExpHistory, now) {
   return earnedPoints;
 }
 
-class GambleCommand extends minecraftCommand {
+class PointsCommand extends minecraftCommand {
   /** @param {import("minecraft-protocol").Client} minecraft */
   constructor(minecraft) {
     super(minecraft);
 
-    this.name = "gamble";
-    this.aliases = ["bet"];
-    this.description = "Gamble points earned from guild experience.";
-    this.options = [
-      {
-        name: "amount",
-        description: "Amount, percentage, or all",
-        required: true
-      }
-    ];
+    this.name = "points";
+    this.aliases = ["balance", "bal", "coins"];
+    this.description = "Shows your current gamble points.";
+    this.options = [];
   }
 
   /**
    * @param {string} player
-   * @param {string} message
    */
-  async onCommand(player, message) {
+  async onCommand(player) {
     if (!GAMBLE_SETTINGS.enabled) {
       return this.send("Gambling is currently disabled.");
-    }
-
-    const args = this.getArgs(message);
-    const betInput = args[0];
-
-    if (!betInput) {
-      return this.send(getUsage());
     }
 
     try {
@@ -502,70 +392,15 @@ class GambleCommand extends minecraftCommand {
       profile.username = player;
 
       migrateProfileIfNeeded(profile, dailyExpHistory, weeklyGuildXp, now);
-
-      const lastGambleAt = Number(profile.lastGambleAt || 0);
-      const cooldownMs = GAMBLE_SETTINGS.cooldownSeconds * 1000;
-
-      if (now - lastGambleAt < cooldownMs) {
-        const remaining = Math.ceil((cooldownMs - (now - lastGambleAt)) / 1000);
-        throw `You are on cooldown. Try again in ${remaining}s.`;
-      }
-
       updatePointsFromDailyExp(profile, dailyExpHistory, now);
-
-      const currentPoints = Math.floor(Number(profile.points || 0));
-      const bet = parseBet(betInput, currentPoints);
-
-      if (bet <= 0) {
-        throw "You do not have enough points to gamble.";
-      }
-
-      if (bet < GAMBLE_SETTINGS.minBet) {
-        throw `Minimum bet is ${formatNumber(GAMBLE_SETTINGS.minBet)} points.`;
-      }
-
-      if (bet > GAMBLE_SETTINGS.maxBet) {
-        throw `Maximum bet is ${formatNumber(GAMBLE_SETTINGS.maxBet)} points.`;
-      }
-
-      if (bet > currentPoints) {
-        throw `You only have ${formatNumber(currentPoints)} points.`;
-      }
-
-      const won = Math.random() < GAMBLE_SETTINGS.winChance;
-      const payout = Math.floor(bet * GAMBLE_SETTINGS.winMultiplier);
-
-      profile.totalGambled = Number(profile.totalGambled || 0) + bet;
-      profile.lastGambleAt = now;
-      profile.updatedAt = now;
-
-      if (won) {
-        const profit = payout - bet;
-
-        profile.points = currentPoints + profit;
-        profile.totalWon = Number(profile.totalWon || 0) + profit;
-        profile.wins = Number(profile.wins || 0) + 1;
-
-        saveData(data);
-
-        return this.send(
-          `${player} won ${formatNumber(profit)} points! Balance: ${formatNumber(profile.points)}.`
-        );
-      }
-
-      profile.points = currentPoints - bet;
-      profile.totalLost = Number(profile.totalLost || 0) + bet;
-      profile.losses = Number(profile.losses || 0) + 1;
 
       saveData(data);
 
-      return this.send(
-        `${player} lost ${formatNumber(bet)} points. Balance: ${formatNumber(profile.points)}.`
-      );
+      return this.send(`${player}, you have ${formatNumber(profile.points)} points.`);
     } catch (error) {
       this.send(formatError(error));
     }
   }
 }
 
-module.exports = GambleCommand;
+module.exports = PointsCommand;
