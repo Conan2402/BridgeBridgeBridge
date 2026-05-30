@@ -12,6 +12,18 @@ const filter = new Filter();
 const fileredWords = config.discord.other.filterWords ?? "";
 filter.addWords(...fileredWords);
 
+function stringifySafe(value) {
+  try {
+    if (typeof value === "string") {
+      return value;
+    }
+
+    return JSON.stringify(value, null, 2);
+  } catch (error) {
+    return String(value);
+  }
+}
+
 class MinecraftManager extends CommunicationBridge {
   constructor(app) {
     super();
@@ -24,16 +36,23 @@ class MinecraftManager extends CommunicationBridge {
   }
 
   connect() {
+    console.log("Minecraft > Creating bot connection...");
+
     global.bot = this.createBotConnection();
     this.bot = bot;
 
-    this.bot._client.on("state", (newState) => {
+    this.registerDebugEvents(this.bot);
+
+    this.bot._client.on("state", (newState, oldState) => {
+      console.log(`Minecraft Client State > ${oldState} -> ${newState}`);
+
       if (newState === "configuration") {
         setImmediate(() => {
           try {
             this.bot._client.write("finish_configuration", {});
+            console.log("Minecraft > Sent finish_configuration packet manually.");
           } catch (error) {
-            console.warn("Failed to manually finish configuration", error);
+            console.warn("Minecraft > Failed to manually finish configuration:", error);
           }
         });
       }
@@ -44,10 +63,68 @@ class MinecraftManager extends CommunicationBridge {
     this.chatHandler.registerEvents(this.bot);
 
     this.bot.on("login", () => {
+      console.log("Minecraft > Bot login event fired.");
       console.log("Minecraft bot is ready!");
+
       require("./other/eventNotifier.js");
       require("./other/skyblockNotifier.js");
       require("./other/alphaPlayerCountTracker.js");
+    });
+  }
+
+  registerDebugEvents(bot) {
+    bot.on("kicked", (reason, loggedIn) => {
+      console.log("========== MINECRAFT KICKED ==========");
+      console.log("Logged in:", loggedIn);
+      console.log("Reason:", stringifySafe(reason));
+      console.log("Client state:", bot?._client?.state);
+      console.log("======================================");
+    });
+
+    bot.on("end", (reason) => {
+      console.log("========== MINECRAFT END ==========");
+      console.log("Reason:", stringifySafe(reason));
+      console.log("Client state:", bot?._client?.state);
+      console.log("===================================");
+    });
+
+    bot.on("error", (error) => {
+      console.log("========== MINECRAFT ERROR ==========");
+      console.log(error && error.stack ? error.stack : stringifySafe(error));
+      console.log("Client state:", bot?._client?.state);
+      console.log("=====================================");
+    });
+
+    bot.on("messagestr", (message) => {
+      console.log("Minecraft MessageStr >", message);
+    });
+
+    bot._client.on("kick_disconnect", (packet) => {
+      console.log("========== MINECRAFT KICK_DISCONNECT PACKET ==========");
+      console.log(stringifySafe(packet));
+      console.log("Client state:", bot?._client?.state);
+      console.log("======================================================");
+    });
+
+    bot._client.on("disconnect", (packet) => {
+      console.log("========== MINECRAFT DISCONNECT PACKET ==========");
+      console.log(stringifySafe(packet));
+      console.log("Client state:", bot?._client?.state);
+      console.log("=================================================");
+    });
+
+    bot._client.on("error", (error) => {
+      console.log("========== MINECRAFT CLIENT ERROR ==========");
+      console.log(error && error.stack ? error.stack : stringifySafe(error));
+      console.log("Client state:", bot?._client?.state);
+      console.log("============================================");
+    });
+
+    bot._client.on("end", (reason) => {
+      console.log("========== MINECRAFT CLIENT END ==========");
+      console.log("Reason:", stringifySafe(reason));
+      console.log("Client state:", bot?._client?.state);
+      console.log("==========================================");
     });
   }
 
@@ -139,11 +216,16 @@ class MinecraftManager extends CommunicationBridge {
         global.replyBridgeEchoCache.delete(clean(message));
       }, 15000);
     }
+
     let successfullySent = false;
+
     const messageListener = (receivedMessage) => {
       receivedMessage = receivedMessage.toString();
 
-      if (receivedMessage.trim().includes(message.trim()) && (this.chatHandler.isGuildMessage(receivedMessage) || this.chatHandler.isOfficerMessage(receivedMessage))) {
+      if (
+        receivedMessage.trim().includes(message.trim()) &&
+        (this.chatHandler.isGuildMessage(receivedMessage) || this.chatHandler.isOfficerMessage(receivedMessage))
+      ) {
         bot.removeListener("message", messageListener);
         successfullySent = true;
       }
@@ -154,6 +236,7 @@ class MinecraftManager extends CommunicationBridge {
 
     setTimeout(() => {
       bot.removeListener("message", messageListener);
+
       if (successfullySent === true) {
         return;
       }
