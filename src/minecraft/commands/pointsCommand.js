@@ -10,6 +10,9 @@ const config = require("../../../config.json");
 const DATA_DIR = path.join(process.cwd(), "data");
 const DATA_FILE = path.join(DATA_DIR, "gamble.json");
 
+const GUILD_MEMBER_RUNTIME_CACHE_MS = 1000 * 30;
+const guildMemberRuntimeCache = new Map();
+
 const DEFAULT_GAMBLE_SETTINGS = {
   enabled: true,
   xpToPointRatio: 1,
@@ -41,7 +44,7 @@ function loadData() {
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
 
-    if (!data.players) {
+    if (!data.players || typeof data.players !== "object") {
       data.players = {};
     }
 
@@ -66,6 +69,104 @@ function formatNumber(number) {
 function normalizeXpNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+function normalizePlayerName(player) {
+  return String(player || "").trim().toLowerCase();
+}
+
+function normalizeUuid(uuid) {
+  return String(uuid || "").replace(/-/g, "").toLowerCase();
+}
+
+function getApiErrorMessage(error) {
+  return (
+    error?.response?.data?.cause ||
+    error?.response?.data?.message ||
+    error?.data?.cause ||
+    error?.data?.message ||
+    error?.message ||
+    String(error || "")
+  );
+}
+
+function isBrokenApiDataError(error) {
+  const message = getApiErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("cannot read properties of undefined") ||
+    message.includes("reading 'data'") ||
+    message.includes('reading "data"') ||
+    message.includes("got undefined but expected data") ||
+    message.includes("typeerror") ||
+    message.includes("type[error]")
+  );
+}
+
+function isHypixelPlayerLookupError(error) {
+  const message = getApiErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("player does not exist") ||
+    message.includes("invalid uuid") ||
+    message.includes("invalid player") ||
+    message.includes("malformed uuid")
+  );
+}
+
+function getCachedUuidFromData(data, player) {
+  const normalizedPlayer = normalizePlayerName(player);
+
+  for (const [uuidKey, profile] of Object.entries(data.players || {})) {
+    if (!profile || typeof profile !== "object") {
+      continue;
+    }
+
+    if (normalizePlayerName(profile.username) === normalizedPlayer) {
+      return normalizeUuid(uuidKey);
+    }
+  }
+
+  return null;
+}
+
+function getProfileByUuid(data, uuid) {
+  const normalizedUuid = normalizeUuid(uuid);
+
+  if (!normalizedUuid) {
+    return null;
+  }
+
+  return data.players?.[normalizedUuid] || null;
+}
+
+async function resolvePlayerUuid(player, data) {
+  const cachedUuid = getCachedUuidFromData(data, player);
+
+  if (cachedUuid) {
+    return cachedUuid;
+  }
+
+  let uuid;
+
+  try {
+    uuid = await getUUID(player);
+  } catch (error) {
+    console.error("[POINTS] UUID lookup failed", {
+      player,
+      message: getApiErrorMessage(error)
+    });
+
+    throw `Could not find a Player named "${player}".`;
+  }
+
+  uuid = normalizeUuid(uuid);
+
+  if (!uuid) {
+    throw `Could not find a Player named "${player}".`;
+  }
+
+  return uuid;
 }
 
 function looksLikeDailyExpHistory(value) {
@@ -235,25 +336,75 @@ function getWeeklyExperienceTotal(member) {
   return 0;
 }
 
-async function getGuildMember(player) {
-  const [uuid, guild] = await Promise.all([
-    getUUID(player),
-    hypixel.getGuild("player", player, { noCaching: true })
-  ]);
+async function getGuildMemberFromApi(player, data) {
+  const uuid = await resolvePlayerUuid(player, data);
+  const normalizedUuid = normalizeUuid(uuid);
+  const runtimeCacheKey = normalizedUuid;
 
-  if (!guild || !Array.isArray(guild.members)) {
-    throw "Player is not in the Guild.";
+  const runtimeCached = guildMemberRuntimeCache.get(runtimeCacheKey);
+
+  if (
+    runtimeCached &&
+    Date.now() - runtimeCached.cachedAt < GUILD_MEMBER_RUNTIME_CACHE_MS
+  ) {
+    return {
+      uuid: runtimeCached.uuid,
+      member: runtimeCached.member
+    };
   }
 
-  const member = guild.members.find(
-    (member) => String(member.uuid).toLowerCase() === String(uuid).toLowerCase()
-  );
+  let guild;
+
+  try {
+    guild = await hypixel.getGuild("player", normalizedUuid, {
+      noCaching: true
+    });
+  } catch (error) {
+    console.error("[POINTS] Hypixel guild lookup failed", {
+      player,
+      uuid: normalizedUuid,
+      lookupType: "player",
+      lookupValue: normalizedUuid,
+      message: getApiErrorMessage(error)
+    });
+
+    if (isBrokenApiDataError(error)) {
+      throw "Could not load player data. Please try again later.";
+    }
+
+    if (isHypixelPlayerLookupError(error)) {
+      throw `Could not load guild data for "${player}". Please try again later.`;
+    }
+
+    throw "Could not load guild data. Please try again later.";
+  }
+
+  if (!guild) {
+    throw `${player} is not in a guild.`;
+  }
+
+  if (!Array.isArray(guild.members)) {
+    throw "Could not read guild member data. Please try again later.";
+  }
+
+  const member = guild.members.find((member) => {
+    return normalizeUuid(member.uuid) === normalizedUuid;
+  });
 
   if (!member) {
-    throw "Player is not in the Guild.";
+    throw `${player} is not in a guild.`;
   }
 
-  return { uuid, member };
+  guildMemberRuntimeCache.set(runtimeCacheKey, {
+    uuid: normalizedUuid,
+    member,
+    cachedAt: Date.now()
+  });
+
+  return {
+    uuid: normalizedUuid,
+    member
+  };
 }
 
 function createProfile(player, weeklyGuildXp, dailyExpHistory, now) {
@@ -283,7 +434,9 @@ function createProfile(player, weeklyGuildXp, dailyExpHistory, now) {
   };
 }
 
-function migrateProfileIfNeeded(profile, dailyExpHistory, weeklyGuildXp, now) {
+function migrateProfileIfNeeded(profile, player, dailyExpHistory, weeklyGuildXp, now) {
+  profile.username = player;
+
   if (profile.initialWeeklyXpGranted !== true) {
     const hasNoRealHistory =
       Number(profile.points || 0) === 0 &&
@@ -376,29 +529,71 @@ class PointsCommand extends minecraftCommand {
     }
 
     try {
-      const { uuid, member } = await getGuildMember(player);
+      const data = loadData();
       const now = Date.now();
 
-      const weeklyGuildXp = getWeeklyExperienceTotal(member);
-      const dailyExpHistory = getDailyExpHistory(member);
+      const cachedUuid = getCachedUuidFromData(data, player);
+      let uuid = cachedUuid;
+      let member = null;
+      let apiAvailable = false;
 
-      const data = loadData();
+      try {
+        const guildMember = await getGuildMemberFromApi(player, data);
+
+        uuid = guildMember.uuid;
+        member = guildMember.member;
+        apiAvailable = true;
+      } catch (apiError) {
+        console.error("[POINTS] API unavailable, trying stored profile", {
+          player,
+          cachedUuid,
+          message: getApiErrorMessage(apiError)
+        });
+
+        if (!cachedUuid || !getProfileByUuid(data, cachedUuid)) {
+          throw apiError;
+        }
+
+        uuid = cachedUuid;
+      }
+
+      const profileExists = Boolean(getProfileByUuid(data, uuid));
+
+      if (!profileExists && !apiAvailable) {
+        throw `Could not create a new gamble profile for "${player}" because the API is unavailable. Try again later.`;
+      }
+
+      let weeklyGuildXp = 0;
+      let dailyExpHistory = {};
+
+      if (apiAvailable && member) {
+        weeklyGuildXp = getWeeklyExperienceTotal(member);
+        dailyExpHistory = getDailyExpHistory(member);
+      }
 
       if (!data.players[uuid]) {
         data.players[uuid] = createProfile(player, weeklyGuildXp, dailyExpHistory, now);
       }
 
       const profile = data.players[uuid];
-      profile.username = player;
 
-      migrateProfileIfNeeded(profile, dailyExpHistory, weeklyGuildXp, now);
-      updatePointsFromDailyExp(profile, dailyExpHistory, now);
+      if (apiAvailable && member) {
+        migrateProfileIfNeeded(profile, player, dailyExpHistory, weeklyGuildXp, now);
+        updatePointsFromDailyExp(profile, dailyExpHistory, now);
+      } else {
+        profile.username = player;
+        profile.updatedAt = now;
+      }
 
       saveData(data);
 
       return this.send(`${player}, you have ${formatNumber(profile.points)} points.`);
     } catch (error) {
-      this.send(formatError(error));
+      if (isBrokenApiDataError(error)) {
+        return this.send("Could not load player data. Please try again later.");
+      }
+
+      return this.send(formatError(getApiErrorMessage(error)));
     }
   }
 }
