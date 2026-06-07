@@ -113,11 +113,29 @@ function normalizeUuid(uuid) {
 }
 
 function getApiErrorMessage(error) {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  const responseData = error?.response?.data;
+  const data = error?.data;
+
+  if (typeof responseData === "string") {
+    return responseData;
+  }
+
+  if (typeof data === "string") {
+    return data;
+  }
+
   return (
-    error?.response?.data?.cause ||
-    error?.response?.data?.message ||
-    error?.data?.cause ||
-    error?.data?.message ||
+    error?.publicMessage ||
+    responseData?.cause ||
+    responseData?.message ||
+    responseData?.errorMessage ||
+    data?.cause ||
+    data?.message ||
+    data?.errorMessage ||
     error?.message ||
     String(error || "")
   );
@@ -144,6 +162,32 @@ function isHypixelPlayerLookupError(error) {
     message.includes("invalid uuid") ||
     message.includes("invalid player") ||
     message.includes("malformed uuid")
+  );
+}
+function isMojangLookupUnavailableError(error) {
+  const message = getApiErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("mojang/microsoft lookup failed") ||
+    message.includes("lookup failed") ||
+    message.includes("try again later") ||
+    message.includes("timeout") ||
+    message.includes("network") ||
+    message.includes("econnreset") ||
+    message.includes("enotfound") ||
+    message.includes("socket") ||
+    message.includes("temporarily unavailable")
+  );
+}
+
+function isInvalidMinecraftUsernameError(error) {
+  const message = getApiErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("invalid username") ||
+    message.includes("could not find a player") ||
+    message.includes("could not find player") ||
+    message.includes("not found")
   );
 }
 
@@ -288,12 +332,19 @@ async function resolvePlayerUuid(player, data) {
   try {
     uuid = await getUUID(player);
   } catch (error) {
+    const message = getApiErrorMessage(error);
+
     console.error("[GAMBLE] Mojang UUID lookup failed", {
       player,
-      message: getApiErrorMessage(error)
+      message,
+      stack: error?.stack
     });
 
-    throw `Could not find a Player named "${player}".`;
+    if (isInvalidMinecraftUsernameError(error)) {
+      throw `Could not find a Player named "${player}".`;
+    }
+
+   throw `Could not find a Player named "${player}".`;
   }
 
   uuid = normalizeUuid(uuid);
@@ -710,7 +761,7 @@ class GambleCommand extends minecraftCommand {
       const profileExists = Boolean(getProfileByUuid(data, uuid));
 
       if (!profileExists && !apiAvailable) {
-        throw `Could not create a new gamble profile for "${player}" because the API is unavailable. Try again later.`;
+        throw `Could not find a Player named "${player}".`;
       }
 
       let weeklyGuildXp = 0;
