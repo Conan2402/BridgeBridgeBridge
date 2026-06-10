@@ -2,6 +2,34 @@ const config = require("../../../config.json");
 const { unemojify } = require("node-emoji");
 const verifiedAccountManager = require("../../contracts/verifiedAccountManager.js");
 
+function normalizeCommandCacheKey(command) {
+  return String(command || "").trim().toLowerCase();
+}
+
+function cacheDiscordBridgeCommand(command, message, verifiedAccount) {
+  const key = normalizeCommandCacheKey(command);
+
+  if (!key) {
+    return;
+  }
+
+  global.discordBridgeCommandContextCache ??= new Map();
+
+  global.discordBridgeCommandContextCache.set(key, {
+    discordUserId: message.author.id,
+    discordUser: message.author,
+    verifiedAccount,
+    cachedAt: Date.now()
+  });
+
+  // Kleine Cleanup-Routine, damit die Map nicht endlos wächst.
+  for (const [cacheKey, context] of global.discordBridgeCommandContextCache.entries()) {
+    if (Date.now() - Number(context.cachedAt || 0) > 1000 * 60 * 5) {
+      global.discordBridgeCommandContextCache.delete(cacheKey);
+    }
+  }
+}
+
 class MessageHandler {
   constructor(discord, command) {
     this.discord = discord;
@@ -54,6 +82,10 @@ class MessageHandler {
         return;
       }
 
+      if (isMinecraftCommand) {
+        cacheDiscordBridgeCommand(messageData.message, message, verifiedAccount);
+      }
+
       if (messageData.message.length > 220) {
         const messageParts = messageData.message.match(/.{1,200}/g);
         if (messageParts === null) {
@@ -62,6 +94,14 @@ class MessageHandler {
 
         for (const part of messageParts) {
           messageData.message = part;
+
+          if (
+            part.startsWith(config.minecraft.bot.prefix) ||
+            (part.startsWith("-") && part.startsWith("- ") === false)
+          ) {
+            cacheDiscordBridgeCommand(part, message, verifiedAccount);
+          }
+
           this.discord.broadcastMessage(messageData);
           await new Promise((resolve) => setTimeout(resolve, 1000));
 

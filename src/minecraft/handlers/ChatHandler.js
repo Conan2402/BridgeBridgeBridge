@@ -612,11 +612,12 @@ class StateHandler extends eventHandler {
 
     if (this.isCommand(match.groups.message)) {
       const officer = match.groups.chatType.includes("Officer");
-      if (this.isDiscordMessage(match.groups.message) === true) {
-        const { player, command } = this.getCommandData(match.groups.message);
+     if (this.isDiscordMessage(match.groups.message) === true) {
+       const { player, command } = this.getCommandData(match.groups.message);
+       const context = this.getDiscordCommandContext(command);
 
-        return this.command.handle(player, command, officer);
-      }
+       return this.command.handle(player, command, officer, context);
+     }
 
       return this.command.handle(match.groups.username, match.groups.message, officer);
     }
@@ -660,7 +661,29 @@ class StateHandler extends eventHandler {
 
     return match.groups;
   }
+getDiscordCommandContext(command) {
+  const key = String(command || "").trim().toLowerCase();
+  const cache = global.discordBridgeCommandContextCache;
 
+  if (!cache || !cache.has(key)) {
+    return {};
+  }
+
+  const context = cache.get(key);
+
+  if (!context || Date.now() - Number(context.cachedAt || 0) > 1000 * 60 * 5) {
+    cache.delete(key);
+    return {};
+  }
+
+  cache.delete(key);
+
+  return {
+    discordUserId: context.discordUserId,
+    discordUser: context.discordUser,
+    verifiedAccount: context.verifiedAccount
+  };
+}
   getRankColor(message) {
     const regex = /§\w*\[(\w*[a-zA-Z0-9]+§?\w*(?:\+{0,2})?§?\w*)\] /g;
 

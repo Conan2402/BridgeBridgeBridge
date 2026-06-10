@@ -6,6 +6,7 @@ const { formatError } = require("../../contracts/helperFunctions.js");
 const hypixel = require("../../contracts/API/HypixelRebornAPI.js");
 const { getUUID } = require("../../contracts/API/mowojangAPI.js");
 const config = require("../../../config.json");
+const verifiedAccountManager = require("../../contracts/verifiedAccountManager.js");
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DATA_FILE = path.join(DATA_DIR, "gamble.json");
@@ -29,7 +30,11 @@ const DEFAULT_GAMBLE_SETTINGS = {
 
   // Initial load only:
   // true = first registration grants current weekly guild XP as starting points.
-  giveInitialWeeklyXp: true
+  giveInitialWeeklyXp: true,
+
+  // Security:
+  // true = Discord bridge users must be verified before gambling.
+  requireVerificationForDiscord: true
 };
 
 const GAMBLE_SETTINGS = {
@@ -56,6 +61,8 @@ GAMBLE_SETTINGS.winChance = Math.max(
 GAMBLE_SETTINGS.winMultiplier = Math.max(1, Number(GAMBLE_SETTINGS.winMultiplier) || 2);
 GAMBLE_SETTINGS.cooldownSeconds = Math.max(0, Number(GAMBLE_SETTINGS.cooldownSeconds) || 0);
 GAMBLE_SETTINGS.giveInitialWeeklyXp = GAMBLE_SETTINGS.giveInitialWeeklyXp === true;
+GAMBLE_SETTINGS.requireVerificationForDiscord =
+  GAMBLE_SETTINGS.requireVerificationForDiscord !== false;
 
 function getUsage() {
   return "Gamble usage - use an amount, a percentage, or all. Examples: 100, 250k, 1.5m, 50%, 12,5%, all.";
@@ -112,6 +119,37 @@ function normalizeUuid(uuid) {
   return String(uuid || "").replace(/-/g, "").toLowerCase();
 }
 
+function normalizeDiscordId(discordId) {
+  return String(discordId || "").trim();
+}
+
+function getDiscordUserIdFromContext(context = {}) {
+  return normalizeDiscordId(
+    context.discordUserId ||
+      context.discordId ||
+      context.discordUser?.id ||
+      context.user?.id ||
+      context.author?.id ||
+      context.member?.id
+  );
+}
+
+function getVerifiedAccountFromContext(context = {}) {
+  const discordUserId = getDiscordUserIdFromContext(context);
+
+  if (!discordUserId) {
+    return {
+      discordUserId: null,
+      verifiedAccount: null
+    };
+  }
+
+  return {
+    discordUserId,
+    verifiedAccount: verifiedAccountManager.getByDiscordId(discordUserId)
+  };
+}
+
 function getApiErrorMessage(error) {
   if (typeof error === "string") {
     return error;
@@ -164,6 +202,7 @@ function isHypixelPlayerLookupError(error) {
     message.includes("malformed uuid")
   );
 }
+
 function isMojangLookupUnavailableError(error) {
   const message = getApiErrorMessage(error).toLowerCase();
 
@@ -344,7 +383,11 @@ async function resolvePlayerUuid(player, data) {
       throw `Could not find a Player named "${player}".`;
     }
 
-   throw `Could not find a Player named "${player}".`;
+    if (isMojangLookupUnavailableError(error)) {
+      throw `Could not find a Player named "${player}".`;
+    }
+
+    throw `Could not find a Player named "${player}".`;
   }
 
   uuid = normalizeUuid(uuid);
@@ -523,8 +566,8 @@ function getWeeklyExperienceTotal(member) {
   return 0;
 }
 
-async function getGuildMemberFromApi(player, data) {
-  const uuid = await resolvePlayerUuid(player, data);
+async function getGuildMemberFromApi(player, data, forcedUuid = null) {
+  const uuid = forcedUuid ? normalizeUuid(forcedUuid) : await resolvePlayerUuid(player, data);
   const normalizedUuid = normalizeUuid(uuid);
   const runtimeCacheKey = normalizedUuid;
 
@@ -716,8 +759,9 @@ class GambleCommand extends minecraftCommand {
   /**
    * @param {string} player
    * @param {string} message
+   * @param {object} context
    */
-  async onCommand(player, message) {
+  async onCommand(player, message, context = {}) {
     if (!GAMBLE_SETTINGS.enabled) {
       return this.send("Gambling is currently disabled.");
     }
@@ -733,13 +777,28 @@ class GambleCommand extends minecraftCommand {
       const data = loadData();
       const now = Date.now();
 
-      const cachedUuid = getCachedUuidFromData(data, player);
+      const { discordUserId, verifiedAccount } = getVerifiedAccountFromContext(context);
+      const isDiscordCommand = Boolean(discordUserId);
+
+      if (isDiscordCommand) {
+        if (!verifiedAccount) {
+          if (GAMBLE_SETTINGS.requireVerificationForDiscord) {
+            return this.send("You must verify before gambling. Use /verify first.");
+          }
+        } else {
+          player = verifiedAccount.username;
+        }
+      }
+
+      const verifiedUuid = verifiedAccount ? normalizeUuid(verifiedAccount.uuid) : null;
+
+      const cachedUuid = verifiedUuid || getCachedUuidFromData(data, player);
       let uuid = cachedUuid;
       let member = null;
       let apiAvailable = false;
 
       try {
-        const guildMember = await getGuildMemberFromApi(player, data);
+        const guildMember = await getGuildMemberFromApi(player, data, verifiedUuid);
 
         uuid = guildMember.uuid;
         member = guildMember.member;
@@ -748,6 +807,8 @@ class GambleCommand extends minecraftCommand {
         console.error("[GAMBLE] API unavailable, trying stored profile", {
           player,
           cachedUuid,
+          verifiedUuid,
+          discordUserId,
           message: getApiErrorMessage(apiError)
         });
 
