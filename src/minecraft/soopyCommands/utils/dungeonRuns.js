@@ -1,13 +1,15 @@
 const zlib = require("zlib");
 const nbt = require("prismarine-nbt");
 
+const TEMPORARY_DUNGEON_XP_BOOST = 0.20;
+
 const MAX_BUFFS = {
   hecatombClass: 0.04,
   scarf: 0.06,
   cataExpert: 0.10,
   cataGraduate: 0.20,
   mayor: 1.00,
-  global: 1.00,
+  global: 1 + TEMPORARY_DUNGEON_XP_BOOST,
 };
 
 const ATTRIBUTE_STACKS = {
