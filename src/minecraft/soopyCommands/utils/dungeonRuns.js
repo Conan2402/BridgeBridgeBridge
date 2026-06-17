@@ -1,15 +1,14 @@
 const zlib = require("zlib");
 const nbt = require("prismarine-nbt");
 
-const TEMPORARY_DUNGEON_XP_BOOST = 0.20;
-
 const MAX_BUFFS = {
   hecatombClass: 0.04,
   scarf: 0.06,
   cataExpert: 0.10,
   cataGraduate: 0.20,
   mayor: 1.00,
-  global: 1 + TEMPORARY_DUNGEON_XP_BOOST,
+  temp: 0.20,
+  global: 1,
 };
 
 const ATTRIBUTE_STACKS = {
@@ -328,6 +327,7 @@ async function readOtherBuffs(memberProfile) {
     cataExpert,
     cataGraduate: cataGraduateLevel * 0.02,
     mayor: MAX_BUFFS.mayor,
+    temp: MAX_BUFFS.temp,
     global: MAX_BUFFS.global,
   };
 }
@@ -354,6 +354,7 @@ function calculateCataXpPerRun(floor, buffs) {
   const base = floor.xp;
   const maxComps = floor.maxComps;
   const hecatombCata = buffs.hecatombClass / 2;
+  const temp = buffs.temp ?? 0;
 
   let cataPerRun;
 
@@ -361,6 +362,7 @@ function calculateCataXpPerRun(floor, buffs) {
     cataPerRun =
       base *
       (0.95 +
+        temp +
         (buffs.mayor - 1 + (maxComps - 1) / 100) +
         buffs.cataExpert +
         hecatombCata +
@@ -369,6 +371,7 @@ function calculateCataXpPerRun(floor, buffs) {
     cataPerRun =
       base *
       (0.95 +
+        temp +
         buffs.cataExpert +
         hecatombCata +
         (maxComps - 1) * (0.024 + hecatombCata / 50));
@@ -376,6 +379,7 @@ function calculateCataXpPerRun(floor, buffs) {
     cataPerRun =
       base *
       (0.95 +
+        temp +
         hecatombCata +
         (maxComps - 1) * (0.022 + hecatombCata / 50));
   }
@@ -385,6 +389,7 @@ function calculateCataXpPerRun(floor, buffs) {
 
 function calculateClassXpPerRun(floor, essenceBuffs, otherBuffs) {
   const result = {};
+  const temp = otherBuffs.temp ?? 0;
 
   for (const cls of CLASSES) {
     result[cls.short] =
@@ -394,6 +399,7 @@ function calculateClassXpPerRun(floor, essenceBuffs, otherBuffs) {
         essenceBuffs[cls.short] +
         otherBuffs.scarf +
         otherBuffs.cataGraduate +
+        temp +
         (otherBuffs.global - 1)) *
         Math.min(1.5, otherBuffs.mayor));
   }
