@@ -4,7 +4,7 @@ const { get } = require("axios");
 const uuidCache = new Map();
 const usernameCache = new Map();
 
-const CACHE_TIME = 12 * 60 * 60 * 1000; // 12 Stunden
+const CACHE_TIME = 12 * 60 * 60 * 1000; // 12 hours
 const REQUEST_TIMEOUT = 7000;
 
 const API_SOURCES = {
@@ -197,13 +197,12 @@ async function getUUID(username) {
   } catch (mojangError) {
     logApiError(mojangError);
 
-    // Bei ungültigem Username nicht fallbacken.
-    // Wenn Mojang sagt 404, dann ist der Name ungültig.
+
     if (mojangError?.status === 404 || mojangError?.message === "Invalid username or UUID.") {
       throw mojangError;
     }
 
-    // Fallback auf mowojang, falls Mojang nicht erreichbar / timeout / 429 / 5xx etc.
+
     try {
       const data = await requestJson(mowojangUrl, API_SOURCES.MOWOJANG);
 
@@ -283,7 +282,7 @@ async function getUsername(uuid) {
   } catch (mojangError) {
     logApiError(mojangError);
 
-    // Bei ungültiger UUID nicht fallbacken.
+
     if (mojangError?.status === 404 || mojangError?.message === "Invalid username or UUID.") {
       throw mojangError;
     }
