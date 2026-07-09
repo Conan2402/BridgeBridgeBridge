@@ -7,6 +7,11 @@ const CommandHandler = require("./CommandHandler.js");
 const config = require("../../config.json");
 const mineflayer = require("mineflayer");
 const Filter = require("bad-words");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const http = require("http");
+const https = require("https");
 
 const filter = new Filter();
 const fileredWords = config.discord.other.filterWords ?? "";
@@ -33,6 +38,10 @@ class MinecraftManager extends CommunicationBridge {
     this.stateHandler = new StateHandler(this);
     this.errorHandler = new ErrorHandler(this);
     this.chatHandler = new ChatHandler(this, new CommandHandler(this));
+
+    this.skyblockResourcePackAcceptUntil = 0;
+    this.skyblockResourcePackTimeout = null;
+    this.skyblockResourcePackHandling = false;
   }
 
   connect() {
@@ -42,17 +51,20 @@ class MinecraftManager extends CommunicationBridge {
     this.bot = bot;
 
     this.registerDebugEvents(this.bot);
+    this.registerSkyblockResourcePackHandler(this.bot);
 
     this.bot._client.on("state", (newState, oldState) => {
       console.log(`Minecraft Client State > ${oldState} -> ${newState}`);
 
-      if (newState === "configuration") {
+      const isInitialLoginConfiguration = oldState === "login" && newState === "configuration";
+
+      if (isInitialLoginConfiguration) {
         setImmediate(() => {
           try {
             this.bot._client.write("finish_configuration", {});
-            console.log("Minecraft > Sent finish_configuration packet manually.");
+            console.log("Minecraft > Sent initial finish_configuration packet manually.");
           } catch (error) {
-            console.warn("Minecraft > Failed to manually finish configuration:", error);
+            console.warn("Minecraft > Failed to manually finish initial configuration:", error.message || error);
           }
         });
       }
@@ -69,6 +81,245 @@ class MinecraftManager extends CommunicationBridge {
       require("./other/eventNotifier.js");
       require("./other/skyblockNotifier.js");
       require("./other/alphaPlayerCountTracker.js");
+    });
+  }
+
+  ensureDirectory(directoryPath) {
+    if (!fs.existsSync(directoryPath)) {
+      fs.mkdirSync(directoryPath, {
+        recursive: true
+      });
+    }
+  }
+
+  getSha1(filePath) {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash("sha1");
+      const stream = fs.createReadStream(filePath);
+
+      stream.on("data", (chunk) => {
+        hash.update(chunk);
+      });
+
+      stream.on("end", () => {
+        resolve(hash.digest("hex"));
+      });
+
+      stream.on("error", reject);
+    });
+  }
+
+  downloadFile(url, outputPath) {
+    return new Promise((resolve, reject) => {
+      const client = url.startsWith("https:") ? https : http;
+      const file = fs.createWriteStream(outputPath);
+
+      const request = client.get(url, (response) => {
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          file.close(() => {
+            fs.unlink(outputPath, () => {});
+          });
+
+          return this.downloadFile(response.headers.location, outputPath)
+            .then(resolve)
+            .catch(reject);
+        }
+
+        if (response.statusCode !== 200) {
+          file.close(() => {
+            fs.unlink(outputPath, () => {});
+          });
+
+          reject(new Error(`HTTP ${response.statusCode} while downloading resource pack.`));
+          return;
+        }
+
+        response.pipe(file);
+
+        file.on("finish", () => {
+          file.close(resolve);
+        });
+      });
+
+      request.on("error", (error) => {
+        file.close(() => {
+          fs.unlink(outputPath, () => {});
+        });
+
+        reject(error);
+      });
+
+      file.on("error", (error) => {
+        file.close(() => {
+          fs.unlink(outputPath, () => {});
+        });
+
+        reject(error);
+      });
+    });
+  }
+
+  async downloadAndVerifyResourcePack(packet) {
+    if (!packet || !packet.url || !packet.hash) {
+      console.warn("Minecraft > Resource pack packet has no url/hash. Cannot download/verify.");
+      return false;
+    }
+
+    const startedAt = Date.now();
+    const resourcePackDirectory = path.resolve(process.cwd(), "resourcepacks", "skyblock");
+    const filePath = path.join(resourcePackDirectory, `${packet.hash}.zip`);
+
+    this.ensureDirectory(resourcePackDirectory);
+
+    try {
+      if (fs.existsSync(filePath)) {
+        const cachedHash = await this.getSha1(filePath);
+
+        if (cachedHash === packet.hash) {
+          console.log(`Minecraft > Resource pack cache hit (${Date.now() - startedAt}ms).`);
+          return true;
+        }
+
+        console.warn("Minecraft > Cached resource pack hash mismatch. Redownloading.");
+        fs.unlinkSync(filePath);
+      }
+
+      await this.downloadFile(packet.url, filePath);
+
+      const actualHash = await this.getSha1(filePath);
+
+      if (actualHash !== packet.hash) {
+        console.warn("Minecraft > Resource pack SHA1 mismatch after download.");
+        console.warn(
+          stringifySafe({
+            expectedHash: packet.hash,
+            actualHash
+          })
+        );
+        return false;
+      }
+
+      console.log(`Minecraft > Resource pack downloaded and verified (${Date.now() - startedAt}ms).`);
+      return true;
+    } catch (error) {
+      console.warn("Minecraft > Resource pack download/verify failed:", error.message || error);
+      return false;
+    }
+  }
+
+  registerSkyblockResourcePackHandler(bot) {
+    const RESOURCE_PACK_RESULTS = {
+      SUCCESSFULLY_LOADED: 0,
+      DECLINED: 1,
+      FAILED_DOWNLOAD: 2,
+      ACCEPTED: 3
+    };
+
+    bot.armSkyblockResourcePackAcceptance = (timeoutMs = 45000) => {
+      this.skyblockResourcePackAcceptUntil = Date.now() + timeoutMs;
+
+      if (this.skyblockResourcePackTimeout) {
+        clearTimeout(this.skyblockResourcePackTimeout);
+        this.skyblockResourcePackTimeout = null;
+      }
+
+      this.skyblockResourcePackTimeout = setTimeout(() => {
+        this.skyblockResourcePackAcceptUntil = 0;
+        this.skyblockResourcePackTimeout = null;
+      }, timeoutMs);
+    };
+
+    const isSkyblockResourcePackAcceptanceArmed = () => {
+      return Date.now() <= this.skyblockResourcePackAcceptUntil;
+    };
+
+    const disarmSkyblockResourcePackAcceptance = () => {
+      this.skyblockResourcePackAcceptUntil = 0;
+
+      if (this.skyblockResourcePackTimeout) {
+        clearTimeout(this.skyblockResourcePackTimeout);
+        this.skyblockResourcePackTimeout = null;
+      }
+    };
+
+    const writeResourcePackStatus = (packet, result) => {
+      if (!packet || packet.uuid === undefined) {
+        console.warn("Minecraft > Cannot send resource pack status because packet.uuid is missing.");
+        return false;
+      }
+
+      try {
+        bot._client.write("resource_pack_receive", {
+          uuid: packet.uuid,
+          result
+        });
+
+        return true;
+      } catch (error) {
+        console.warn("Minecraft > Failed to write resource_pack_receive:", error.message || error);
+        return false;
+      }
+    };
+
+    const finishSkyblockConfiguration = () => {
+      if (!bot?._client || bot._client.state !== "configuration") {
+        return;
+      }
+
+      try {
+        bot._client.write("finish_configuration", {});
+      } catch (error) {
+        console.warn("Minecraft > Failed to send SkyBlock finish_configuration:", error.message || error);
+      }
+    };
+
+    const acceptSkyblockResourcePack = async (packet = {}) => {
+      if (!isSkyblockResourcePackAcceptanceArmed()) {
+        return;
+      }
+
+      if (this.skyblockResourcePackHandling) {
+        return;
+      }
+
+      this.skyblockResourcePackHandling = true;
+
+      try {
+        const accepted = writeResourcePackStatus(packet, RESOURCE_PACK_RESULTS.ACCEPTED);
+
+        if (!accepted) {
+          disarmSkyblockResourcePackAcceptance();
+          return;
+        }
+
+        const loadedSuccessfully = await this.downloadAndVerifyResourcePack(packet);
+
+        if (!loadedSuccessfully) {
+          writeResourcePackStatus(packet, RESOURCE_PACK_RESULTS.FAILED_DOWNLOAD);
+          disarmSkyblockResourcePackAcceptance();
+          return;
+        }
+
+        const loaded = writeResourcePackStatus(packet, RESOURCE_PACK_RESULTS.SUCCESSFULLY_LOADED);
+
+        if (loaded) {
+          setTimeout(() => {
+            finishSkyblockConfiguration();
+          }, 500);
+        }
+
+        disarmSkyblockResourcePackAcceptance();
+      } finally {
+        this.skyblockResourcePackHandling = false;
+      }
+    };
+
+    bot._client.on("resource_pack_send", acceptSkyblockResourcePack);
+    bot._client.on("add_resource_pack", acceptSkyblockResourcePack);
+    bot._client.on("resource_pack_push", acceptSkyblockResourcePack);
+
+    bot.on("resourcePack", () => {
+      // Handled through raw resource pack packets because newer packets include a UUID.
     });
   }
 
