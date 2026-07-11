@@ -224,7 +224,7 @@ async function getUUID(username) {
       logApiError(mowojangError);
 
       throw createApiError(
-        `Could not fetch UUID for ${cleanUsername}. Mojang failed with "${mojangError.message}", fallback failed with "${mowojangError.message}".`,
+        `Could not fetch UUID for ${cleanUsername}.`,
         {
           source: "mojang+mowojang",
           originalError: {
@@ -308,7 +308,7 @@ async function getUsername(uuid) {
       logApiError(mowojangError);
 
       throw createApiError(
-        `Could not fetch username for ${normalizedUUID}. Mojang failed with "${mojangError.message}", fallback failed with "${mowojangError.message}".`,
+        `Could not fetch username for ${normalizedUUID}.`,
         {
           source: "mojang+mowojang",
           originalError: {
