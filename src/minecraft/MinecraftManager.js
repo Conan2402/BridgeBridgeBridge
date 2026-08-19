@@ -384,7 +384,7 @@ class MinecraftManager extends CommunicationBridge {
       host: "mc.hypixel.net",
       port: 25565,
       auth: "microsoft",
-      version: "1.21.11",
+      version: "26.1.2",
       profilesFolder: "./auth-cache",
       plugins: {
         blocks: false,
