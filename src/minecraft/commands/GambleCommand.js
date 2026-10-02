@@ -23,6 +23,7 @@ const DEFAULT_GAMBLE_SETTINGS = {
   minBet: 1,
   maxBet: 100_000_000,
 
+  // System gamble chance (old behavior)
   winChance: 0.45,
   winMultiplier: 2,
 
@@ -65,7 +66,7 @@ GAMBLE_SETTINGS.requireVerificationForDiscord =
   GAMBLE_SETTINGS.requireVerificationForDiscord !== false;
 
 function getUsage() {
-  return "Gamble usage - use an amount, a percentage, or all. Examples: 100, 250k, 1.5m, 50%, 12,5%, all.";
+  return "Usage !gamble <amount> (system gamble) or !gamble <ign> [points] (challenge a player). Examples: !gamble 100, 250k, 1.5m, 50%, 12,5%, all, !gamble ffnn, !gamble ffnn 50k.";
 }
 
 function ensureDataFile() {
@@ -74,7 +75,10 @@ function ensureDataFile() {
   }
 
   if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ players: {} }, null, 2));
+    fs.writeFileSync(
+      DATA_FILE,
+      JSON.stringify({ players: {}, pendingChallenges: {} }, null, 2)
+    );
   }
 }
 
@@ -88,14 +92,26 @@ function loadData() {
       data.players = {};
     }
 
+    if (!data.pendingChallenges || typeof data.pendingChallenges !== "object") {
+      data.pendingChallenges = {};
+    }
+
     return data;
   } catch {
-    return { players: {} };
+    return { players: {}, pendingChallenges: {} };
   }
 }
 
 function saveData(data) {
   ensureDataFile();
+
+  if (!data.players || typeof data.players !== "object") {
+    data.players = {};
+  }
+
+  if (!data.pendingChallenges || typeof data.pendingChallenges !== "object") {
+    data.pendingChallenges = {};
+  }
 
   const tempFile = `${DATA_FILE}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(data, null, 2));
@@ -331,6 +347,15 @@ function parseBet(input, points) {
   }
 
   return Math.floor(amount);
+}
+
+function isBetLikeToken(input) {
+  if (typeof input !== "string") {
+    return false;
+  }
+
+  const raw = input.trim().toLowerCase();
+  return raw === "all" || raw.endsWith("%") || /^(\d+(?:[.,]\d+)*)([km])?$/.test(raw);
 }
 
 function getCachedUuidFromData(data, player) {
@@ -739,6 +764,118 @@ function updatePointsFromDailyExp(profile, dailyExpHistory, now) {
   return earnedPoints;
 }
 
+function buildChallengeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getPendingChallengesStore(data) {
+  if (!data.pendingChallenges || typeof data.pendingChallenges !== "object") {
+    data.pendingChallenges = {};
+  }
+
+  return data.pendingChallenges;
+}
+function findPendingChallengeForPair(data, challengerUuid, targetUuid) {
+  const now = Date.now();
+  const normalizedChallengerUuid = normalizeUuid(challengerUuid);
+  const normalizedTargetUuid = normalizeUuid(targetUuid);
+  const store = getPendingChallengesStore(data);
+
+  return (
+    Object.values(store).find((challenge) => {
+      if (!challenge || typeof challenge !== "object") {
+        return false;
+      }
+
+      return (
+        normalizeUuid(challenge.fromUuid) === normalizedChallengerUuid &&
+        normalizeUuid(challenge.toUuid) === normalizedTargetUuid &&
+        (!challenge.expiresAt || Number(challenge.expiresAt) > now)
+      );
+    }) || null
+  );
+}
+async function resolvePlayerState(player, context, data, now, { allowDiscordVerification = true } = {}) {
+  let effectivePlayer = player;
+  let verifiedUuid = null;
+
+  if (allowDiscordVerification) {
+    const { discordUserId, verifiedAccount } = getVerifiedAccountFromContext(context);
+    const isDiscordCommand = Boolean(discordUserId);
+
+    if (isDiscordCommand) {
+      if (!verifiedAccount) {
+        if (GAMBLE_SETTINGS.requireVerificationForDiscord) {
+          throw "You must verify before gambling. Use /verify first.";
+        }
+      } else {
+        effectivePlayer = verifiedAccount.username;
+        verifiedUuid = normalizeUuid(verifiedAccount.uuid);
+      }
+    }
+  }
+
+  const cachedUuid = verifiedUuid || getCachedUuidFromData(data, effectivePlayer);
+  let uuid = cachedUuid;
+  let member = null;
+  let apiAvailable = false;
+
+  let weeklyGuildXp = 0;
+  let dailyExpHistory = {};
+
+  try {
+    const guildMember = await getGuildMemberFromApi(effectivePlayer, data, verifiedUuid);
+
+    uuid = guildMember.uuid;
+    member = guildMember.member;
+    apiAvailable = true;
+  } catch (apiError) {
+    console.error("[GAMBLE] API unavailable, trying stored profile", {
+      player: effectivePlayer,
+      cachedUuid,
+      verifiedUuid,
+      message: getApiErrorMessage(apiError)
+    });
+
+    if (!cachedUuid || !getProfileByUuid(data, cachedUuid)) {
+      throw apiError;
+    }
+
+    uuid = cachedUuid;
+  }
+
+  if (!uuid) {
+    throw `Could not find a Player named "${effectivePlayer}".`;
+  }
+
+  if (apiAvailable && member) {
+    weeklyGuildXp = getWeeklyExperienceTotal(member);
+    dailyExpHistory = getDailyExpHistory(member);
+  }
+
+  if (!data.players[uuid]) {
+    data.players[uuid] = createProfile(effectivePlayer, weeklyGuildXp, dailyExpHistory, now);
+  }
+
+  const profile = data.players[uuid];
+
+  if (apiAvailable && member) {
+    migrateProfileIfNeeded(profile, effectivePlayer, dailyExpHistory, weeklyGuildXp, now);
+  } else {
+    profile.username = effectivePlayer;
+    profile.updatedAt = now;
+  }
+
+  return {
+    player: effectivePlayer,
+    uuid,
+    profile,
+    member,
+    apiAvailable,
+    dailyExpHistory
+  };
+}
+
 class GambleCommand extends minecraftCommand {
   /** @param {import("minecraft-protocol").Client} minecraft */
   constructor(minecraft) {
@@ -746,12 +883,12 @@ class GambleCommand extends minecraftCommand {
 
     this.name = "gamble";
     this.aliases = ["bet"];
-    this.description = "Gamble points earned from guild experience.";
+    this.description = "Gamble points earned from guild experience or challenge another player.";
     this.options = [
       {
-        name: "amount",
-        description: "Amount, percentage, or all",
-        required: true
+        name: "amount-or-player",
+        description: "Amount for system gamble or player name for challenge",
+        required: false
       }
     ];
   }
@@ -766,10 +903,11 @@ class GambleCommand extends minecraftCommand {
       return this.send("Gambling is currently disabled.");
     }
 
-    const args = this.getArgs(message);
-    const betInput = args[0];
+    const args = this.getArgs(message).filter((value) => String(value || "").trim().length > 0);
+    const firstArg = args[0];
+    const secondArg = args[1];
 
-    if (!betInput) {
+    if (!firstArg) {
       return this.send(getUsage());
     }
 
@@ -777,76 +915,91 @@ class GambleCommand extends minecraftCommand {
       const data = loadData();
       const now = Date.now();
 
-      const { discordUserId, verifiedAccount } = getVerifiedAccountFromContext(context);
-      const isDiscordCommand = Boolean(discordUserId);
-
-      if (isDiscordCommand) {
-        if (!verifiedAccount) {
-          if (GAMBLE_SETTINGS.requireVerificationForDiscord) {
-            return this.send("You must verify before gambling. Use /verify first.");
-          }
-        } else {
-          player = verifiedAccount.username;
-        }
-      }
-
-      const verifiedUuid = verifiedAccount ? normalizeUuid(verifiedAccount.uuid) : null;
-
-      const cachedUuid = verifiedUuid || getCachedUuidFromData(data, player);
-      let uuid = cachedUuid;
-      let member = null;
-      let apiAvailable = false;
-
-      try {
-        const guildMember = await getGuildMemberFromApi(player, data, verifiedUuid);
-
-        uuid = guildMember.uuid;
-        member = guildMember.member;
-        apiAvailable = true;
-      } catch (apiError) {
-        console.error("[GAMBLE] API unavailable, trying stored profile", {
-          player,
-          cachedUuid,
-          verifiedUuid,
-          discordUserId,
-          message: getApiErrorMessage(apiError)
+      // Player-vs-player challenge mode
+      if (!isBetLikeToken(firstArg)) {
+        const challengerState = await resolvePlayerState(player, context, data, now, {
+          allowDiscordVerification: true
         });
 
-        if (!cachedUuid || !getProfileByUuid(data, cachedUuid)) {
-          throw apiError;
+        const targetState = await resolvePlayerState(firstArg, {}, data, now, {
+          allowDiscordVerification: false
+        });
+
+        if (normalizeUuid(challengerState.uuid) === normalizeUuid(targetState.uuid)) {
+          return this.send("You cannot gamble against yourself.");
+        }
+const existingChallenge = findPendingChallengeForPair(
+  data,
+  challengerState.uuid,
+  targetState.uuid
+);
+
+if (existingChallenge) {
+  return this.send(`${challengerState.player} already has an open challenge against ${targetState.player}.`);
+}
+        if (challengerState.apiAvailable) {
+          updatePointsFromDailyExp(challengerState.profile, challengerState.dailyExpHistory, now);
         }
 
-        uuid = cachedUuid;
+        if (targetState.apiAvailable) {
+          updatePointsFromDailyExp(targetState.profile, targetState.dailyExpHistory, now);
+        }
+
+        const challengerPoints = Math.floor(Number(challengerState.profile.points || 0));
+
+
+        let requestedAmount = 0;
+
+        if (secondArg) {
+          requestedAmount = parseBet(secondArg, challengerPoints);
+          requestedAmount = Math.min(requestedAmount, challengerPoints);
+
+          if (requestedAmount <= 0) {
+            return this.send("You must bet at least 1 point.");
+          }
+        }
+
+       const previewBet =
+         requestedAmount > 0
+           ? Math.min(requestedAmount, challengerPoints)
+           : challengerPoints;
+
+        if (previewBet <= 0) {
+          return this.send("One of you does not have enough points.");
+        }
+
+        const challengeId = buildChallengeId();
+
+        getPendingChallengesStore(data)[challengeId] = {
+          id: challengeId,
+          fromUuid: challengerState.uuid,
+          fromName: challengerState.player,
+          toUuid: targetState.uuid,
+          toName: targetState.player,
+          amount: requestedAmount, // 0 = use maximum available when accepted
+          createdAt: now,
+          expiresAt: now + 60 * 1000
+        };
+
+        saveData(data);
+
+        if (requestedAmount > 0) {
+          return this.send(
+            `${challengerState.player} challenged ${targetState.player} for ${formatNumber(requestedAmount)} points. ${targetState.player} can accept with !accept ${challengerState.player}.`
+          );
+        }
+
+        return this.send(
+          `${challengerState.player} challenged ${targetState.player} for ${formatNumber(previewBet)} points. ${targetState.player} can accept with !accept ${challengerState.player}.`
+        );
       }
 
-      const profileExists = Boolean(getProfileByUuid(data, uuid));
+      // Old system-gamble mode
+      const senderState = await resolvePlayerState(player, context, data, now, {
+        allowDiscordVerification: true
+      });
 
-      if (!profileExists && !apiAvailable) {
-        throw `Could not find a Player named "${player}".`;
-      }
-
-      let weeklyGuildXp = 0;
-      let dailyExpHistory = {};
-
-      if (apiAvailable && member) {
-        weeklyGuildXp = getWeeklyExperienceTotal(member);
-        dailyExpHistory = getDailyExpHistory(member);
-      }
-
-      if (!data.players[uuid]) {
-        data.players[uuid] = createProfile(player, weeklyGuildXp, dailyExpHistory, now);
-      }
-
-      const profile = data.players[uuid];
-
-      if (apiAvailable && member) {
-        migrateProfileIfNeeded(profile, player, dailyExpHistory, weeklyGuildXp, now);
-      } else {
-        profile.username = player;
-        profile.updatedAt = now;
-      }
-
-      const lastGambleAt = Number(profile.lastGambleAt || 0);
+      const lastGambleAt = Number(senderState.profile.lastGambleAt || 0);
       const cooldownMs = GAMBLE_SETTINGS.cooldownSeconds * 1000;
 
       if (now - lastGambleAt < cooldownMs) {
@@ -856,12 +1009,12 @@ class GambleCommand extends minecraftCommand {
         throw `You are on cooldown. Try again in ${remaining}s.`;
       }
 
-      if (apiAvailable && member) {
-        updatePointsFromDailyExp(profile, dailyExpHistory, now);
+      if (senderState.apiAvailable) {
+        updatePointsFromDailyExp(senderState.profile, senderState.dailyExpHistory, now);
       }
 
-      const currentPoints = Math.floor(Number(profile.points || 0));
-      const bet = parseBet(betInput, currentPoints);
+      const currentPoints = Math.floor(Number(senderState.profile.points || 0));
+      const bet = parseBet(firstArg, currentPoints);
 
       if (bet <= 0) {
         saveData(data);
@@ -886,32 +1039,32 @@ class GambleCommand extends minecraftCommand {
       const won = Math.random() < GAMBLE_SETTINGS.winChance;
       const payout = Math.floor(bet * GAMBLE_SETTINGS.winMultiplier);
 
-      profile.totalGambled = Number(profile.totalGambled || 0) + bet;
-      profile.lastGambleAt = now;
-      profile.updatedAt = now;
+      senderState.profile.totalGambled = Number(senderState.profile.totalGambled || 0) + bet;
+      senderState.profile.lastGambleAt = now;
+      senderState.profile.updatedAt = now;
 
       if (won) {
         const profit = payout - bet;
 
-        profile.points = currentPoints + profit;
-        profile.totalWon = Number(profile.totalWon || 0) + profit;
-        profile.wins = Number(profile.wins || 0) + 1;
+        senderState.profile.points = currentPoints + profit;
+        senderState.profile.totalWon = Number(senderState.profile.totalWon || 0) + profit;
+        senderState.profile.wins = Number(senderState.profile.wins || 0) + 1;
 
         saveData(data);
 
         return this.send(
-          `${player} won ${formatNumber(profit)} points! Balance: ${formatNumber(profile.points)}.`
+          `${senderState.player} won ${formatNumber(profit)} points! Balance: ${formatNumber(senderState.profile.points)}.`
         );
       }
 
-      profile.points = currentPoints - bet;
-      profile.totalLost = Number(profile.totalLost || 0) + bet;
-      profile.losses = Number(profile.losses || 0) + 1;
+      senderState.profile.points = currentPoints - bet;
+      senderState.profile.totalLost = Number(senderState.profile.totalLost || 0) + bet;
+      senderState.profile.losses = Number(senderState.profile.losses || 0) + 1;
 
       saveData(data);
 
       return this.send(
-        `${player} lost ${formatNumber(bet)} points. Balance: ${formatNumber(profile.points)}.`
+        `${senderState.player} lost ${formatNumber(bet)} points. Balance: ${formatNumber(senderState.profile.points)}.`
       );
     } catch (error) {
       if (isBrokenApiDataError(error)) {

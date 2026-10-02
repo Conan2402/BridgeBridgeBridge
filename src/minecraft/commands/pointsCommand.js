@@ -523,10 +523,13 @@ class PointsCommand extends minecraftCommand {
   /**
    * @param {string} player
    */
-  async onCommand(player) {
-    if (!GAMBLE_SETTINGS.enabled) {
-      return this.send("Gambling is currently disabled.");
-    }
+ async onCommand(player, message) {
+   if (!GAMBLE_SETTINGS.enabled) {
+     return this.send("Gambling is currently disabled.");
+   }
+
+   const args = this.getArgs(message).filter((value) => String(value || "").trim().length > 0);
+   const targetName = args[0] || player;
 
     try {
       const data = loadData();
@@ -587,7 +590,7 @@ class PointsCommand extends minecraftCommand {
 
       saveData(data);
 
-      return this.send(`${player}, you have ${formatNumber(profile.points)} points.`);
+      return this.send(`${targetName}, you have ${formatNumber(profile.points)} points.`);
     } catch (error) {
       if (isBrokenApiDataError(error)) {
         return this.send("Could not load player data. Please try again later.");
