@@ -38,7 +38,11 @@ class AcceptCommand extends minecraftCommand {
       const challenge = findPendingChallengeForTarget(data, targetUuid, challengerInput);
 
       if (!challenge) {
-        return this.send(challengerInput ? `No challenge from "${challengerInput}".` : "No pending challenges.");
+        return this.send(
+          challengerInput
+            ? `No challenge from "${challengerInput}".`
+            : "No pending challenges."
+        );
       }
 
       if (challenge.expiresAt && Number(challenge.expiresAt) <= now) {
@@ -48,27 +52,23 @@ class AcceptCommand extends minecraftCommand {
       }
 
       const challengerUuid = normalizeUuid(challenge.fromUuid);
-      const challengerName = challenge.fromName;
+      const challengerName = challenge.fromName || challengerInput || player;
       const targetName = challenge.toName || player;
 
       const challengerProfile = ensureProfile(data, challengerUuid, challengerName, now);
       const targetProfile = ensureProfile(data, targetUuid, targetName, now);
 
       const requestedAmount = Math.floor(Number(challenge.amount) || 0);
-      if (requestedAmount <= 0) {
-        deletePendingChallenge(data, challenge.id);
-        saveData(data);
-        return this.send("No pending challenges.");
-      }
-
       const challengerPoints = Math.floor(Number(challengerProfile.points) || 0);
       const targetPoints = Math.floor(Number(targetProfile.points) || 0);
 
-      const bet = Math.min(requestedAmount, challengerPoints);
+      // amount === 0 means: use the challenger's current available points
+      const bet = requestedAmount > 0 ? Math.min(requestedAmount, challengerPoints) : challengerPoints;
+
       if (bet <= 0) {
         deletePendingChallenge(data, challenge.id);
         saveData(data);
-        return this.send("No pending challenges.");
+        return this.send("Challenger has no points available.");
       }
 
       const challengerWon = Math.random() < 0.5;
