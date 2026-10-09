@@ -8,16 +8,30 @@ const { get } = require("axios");
  */
 
 /**
- * @param {RawMob[]} mobs
+ * Normalizes arrays / object maps into a plain array.
+ * @param {any} value
+ * @returns {any[]}
+ */
+function asArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return [];
+}
+
+/**
+ * @param {RawMob[] | Record<string, RawMob>} mobs
  * @returns {Mob[]}
- * */
+ */
 function formatBestiaryMobs(mobs) {
   const output = [];
-  for (const mob of mobs) {
+
+  for (const mob of asArray(mobs)) {
+    if (!mob) continue;
+
     output.push({
-      name: mob.name.replace(/§./g, ""),
-      cap: mob.cap,
-      mobs: mob.mobs,
+      name: String(mob.name ?? "").replace(/§./g, ""),
+      cap: mob.cap ?? 0,
+      mobs: asArray(mob.mobs),
       bracket: mob.bracket
     });
   }
@@ -30,13 +44,15 @@ const cache = {};
 
 /**
  * @returns {Promise<BestiaryConstants | null>}
- * */
+ */
 async function getBestiaryConstants() {
   if (cache.lastUpdated && cache.lastUpdated + 1000 * 60 * 60 * 12 > Date.now()) {
     return cache.data ?? null;
   }
 
-  const response = await get("https://raw.githubusercontent.com/NotEnoughUpdates/NotEnoughUpdates-REPO/refs/heads/master/constants/bestiary.json");
+  const response = await get(
+    "https://raw.githubusercontent.com/NotEnoughUpdates/NotEnoughUpdates-REPO/refs/heads/master/constants/bestiary.json"
+  );
   const bestiary = response?.data;
   if (!bestiary) {
     return null;
@@ -44,15 +60,19 @@ async function getBestiaryConstants() {
 
   /** @type {BestiaryConstants} */
   const output = { brackets: bestiary.brackets, islands: {} };
+
   for (const [islandId, islandData] of Object.entries(bestiary).filter(([key]) => key !== "brackets")) {
-    if (islandData.hasSubcategories === true) {
+    if (islandData?.hasSubcategories === true) {
       for (const [categoryId, categoryData] of Object.entries(islandData)) {
-        if (categoryData.mobs === undefined) {
+        if (!categoryData || categoryData.mobs === undefined) {
           continue;
         }
 
         const id = islandId === categoryId ? islandId : `${islandId}:${categoryId}`;
-        const name = categoryData.name.includes(islandData.name) ? categoryData.name : `${categoryData.name} ${islandData.name}`;
+        const name = categoryData.name.includes(islandData.name)
+          ? categoryData.name
+          : `${categoryData.name} ${islandData.name}`;
+
         output.islands[id] = {
           name: name,
           mobs: formatBestiaryMobs(categoryData.mobs)

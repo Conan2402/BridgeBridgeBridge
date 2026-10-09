@@ -3,16 +3,21 @@ const nbt = require("prismarine-nbt");
 
 const MAX_BUFFS = {
   hecatombClass: 0.04,
-  scarf: 0.06,
+  catacombsGraduate: 0.20, // Scarf Shard / Catacombs Graduate
+  catacombsExplorer: 0.10, // Bonzo Shard / Catacombs Explorer
   cataExpert: 0.10,
-  cataGraduate: 0.20,
   mayor: 1.00,
-  temp: 0.20,
+  temp: 0.00, // default: no temporary buff active
   global: 1,
 };
 
 const ATTRIBUTE_STACKS = {
   CATACOMBS_GRADUATE: "catacombs_graduate",
+  CATACOMBS_EXPLORER: "catacombs_explorer",
+};
+
+const ATTRIBUTE_SHARD_REQUIREMENTS = {
+  EPIC: [1, 2, 4, 6, 9, 12, 16, 20, 25, 32],
 };
 
 const CLASSES = [
@@ -286,32 +291,52 @@ function readEssenceBuffs(memberProfile) {
   return buffs;
 }
 
+function getShardLevelFromStacks(stacks, rarity = "EPIC") {
+  const requirements = ATTRIBUTE_SHARD_REQUIREMENTS[rarity];
+
+  if (!requirements) {
+    throw new Error(`Unsupported shard rarity: ${rarity}`);
+  }
+
+  const shardCount = Math.max(0, Math.floor(Number(stacks) || 0));
+  let level = 0;
+
+  for (let i = 0; i < requirements.length; i++) {
+    if (shardCount >= requirements[i]) {
+      level = i + 1;
+    }
+  }
+
+  return level;
+}
+
+function getShardBonusFromStacks(stacks, maxBonus, rarity = "EPIC") {
+  const level = getShardLevelFromStacks(stacks, rarity);
+  return (level / 10) * maxBonus;
+}
+
+function readAttributeShardStacks(memberProfile, stackKey) {
+  const rawStacks = memberProfile?.attributes?.stacks?.[stackKey];
+
+  if (typeof rawStacks !== "number" || !Number.isFinite(rawStacks)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(rawStacks));
+}
+
 function readCatacombsGraduateLevel(memberProfile) {
-  const stacks = memberProfile?.attributes?.stacks?.[ATTRIBUTE_STACKS.CATACOMBS_GRADUATE];
+  const stacks = readAttributeShardStacks(memberProfile, ATTRIBUTE_STACKS.CATACOMBS_GRADUATE);
+  return getShardLevelFromStacks(stacks, "EPIC");
+}
 
-  if (typeof stacks !== "number" || !Number.isFinite(stacks)) {
-    return 10;
-  }
-
-  if (stacks >= 24) {
-    return 10;
-  }
-
-  return 10;
+function readCatacombsExplorerLevel(memberProfile) {
+  const stacks = readAttributeShardStacks(memberProfile, ATTRIBUTE_STACKS.CATACOMBS_EXPLORER);
+  return getShardLevelFromStacks(stacks, "EPIC");
 }
 
 async function readOtherBuffs(memberProfile) {
   const accessoryBagIds = await readAccessoryBagItemIds(memberProfile);
-
-  const scarf = getBestAccessoryBuff(
-    accessoryBagIds,
-    [
-      { id: "SCARF_GRIMOIRE", value: 0.06 },
-      { id: "SCARF_THESIS", value: 0.04 },
-      { id: "SCARF_STUDIES", value: 0.02 },
-    ],
-    MAX_BUFFS.scarf
-  );
 
   const cataExpert = getBestAccessoryBuff(
     accessoryBagIds,
@@ -319,13 +344,20 @@ async function readOtherBuffs(memberProfile) {
     MAX_BUFFS.cataExpert
   );
 
-  const cataGraduateLevel = readCatacombsGraduateLevel(memberProfile);
+  const catacombsGraduateStacks = readAttributeShardStacks(
+    memberProfile,
+    ATTRIBUTE_STACKS.CATACOMBS_GRADUATE
+  );
+  const catacombsExplorerStacks = readAttributeShardStacks(
+    memberProfile,
+    ATTRIBUTE_STACKS.CATACOMBS_EXPLORER
+  );
 
   return {
     hecatombClass: MAX_BUFFS.hecatombClass,
-    scarf,
+    catacombsGraduate: getShardBonusFromStacks(catacombsGraduateStacks, MAX_BUFFS.catacombsGraduate, "EPIC"),
+    catacombsExplorer: getShardBonusFromStacks(catacombsExplorerStacks, MAX_BUFFS.catacombsExplorer, "EPIC"),
     cataExpert,
-    cataGraduate: cataGraduateLevel * 0.02,
     mayor: MAX_BUFFS.mayor,
     temp: MAX_BUFFS.temp,
     global: MAX_BUFFS.global,
@@ -355,6 +387,7 @@ function calculateCataXpPerRun(floor, buffs) {
   const maxComps = floor.maxComps;
   const hecatombCata = buffs.hecatombClass / 2;
   const temp = buffs.temp ?? 0;
+  const catacombsExplorer = buffs.catacombsExplorer ?? 0;
 
   let cataPerRun;
 
@@ -363,6 +396,7 @@ function calculateCataXpPerRun(floor, buffs) {
       base *
       (0.95 +
         temp +
+        catacombsExplorer +
         (buffs.mayor - 1 + (maxComps - 1) / 100) +
         buffs.cataExpert +
         hecatombCata +
@@ -372,6 +406,7 @@ function calculateCataXpPerRun(floor, buffs) {
       base *
       (0.95 +
         temp +
+        catacombsExplorer +
         buffs.cataExpert +
         hecatombCata +
         (maxComps - 1) * (0.024 + hecatombCata / 50));
@@ -380,6 +415,7 @@ function calculateCataXpPerRun(floor, buffs) {
       base *
       (0.95 +
         temp +
+        catacombsExplorer +
         hecatombCata +
         (maxComps - 1) * (0.022 + hecatombCata / 50));
   }
@@ -397,8 +433,7 @@ function calculateClassXpPerRun(floor, essenceBuffs, otherBuffs) {
       ((1 +
         otherBuffs.hecatombClass +
         essenceBuffs[cls.short] +
-        otherBuffs.scarf +
-        otherBuffs.cataGraduate +
+        otherBuffs.catacombsGraduate +
         temp +
         (otherBuffs.global - 1)) *
         Math.min(1.5, otherBuffs.mayor));

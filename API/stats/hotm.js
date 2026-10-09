@@ -1,7 +1,40 @@
-// CREDITS: by @Kathund (https://github.com/Kathund)
 const CONSTANTS = require("../constants/mining.js");
 const { getLevelByXp } = require("../constants/skills.js");
 const moment = require("moment");
+
+function getFirstNumber(obj, keys) {
+  if (!obj) return null;
+
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+
+  return null;
+}
+
+function getPath(obj, path) {
+  return path.split(".").reduce((acc, key) => acc?.[key], obj);
+}
+
+function formatAbility(rawAbility) {
+  if (typeof rawAbility !== "string" || rawAbility.trim() === "") return "None";
+
+  const normalized = rawAbility.trim().toLowerCase().replace(/[\s-]+/g, "_").replace(/[^a-z0-9_]/g, "");
+  const mapped = CONSTANTS.hotm.perks?.[normalized]?.name;
+  if (mapped) return mapped;
+
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
 /**
  * Returns the player's HotM stats.
@@ -14,27 +47,68 @@ function getHotm(profile) {
       return null;
     }
 
+    const miningCore = profile.mining_core;
+    const skillTree = profile.skill_tree ?? {};
+
+    const mithrilCurrent =
+      getFirstNumber(miningCore, ["powder_mithril_total", "mithril_powder_total"]) ?? 0;
+    const mithrilSpent =
+      getFirstNumber(miningCore, ["powder_spent_mithril", "mithril_powder_spent"]) ?? 0;
+    const mithrilTotal =
+      getFirstNumber(miningCore, ["powder_mithril", "mithril_powder"]) ?? (mithrilCurrent + mithrilSpent);
+
+    const gemstoneCurrent =
+      getFirstNumber(miningCore, ["powder_gemstone_total", "gemstone_powder_total"]) ?? 0;
+    const gemstoneSpent =
+      getFirstNumber(miningCore, ["powder_spent_gemstone", "gemstone_powder_spent"]) ?? 0;
+    const gemstoneTotal =
+      getFirstNumber(miningCore, ["powder_gemstone", "gemstone_powder"]) ?? (gemstoneCurrent + gemstoneSpent);
+
+    const glaciteCurrent =
+      getFirstNumber(miningCore, ["powder_glacite_total", "glacite_powder_total"]) ?? 0;
+    const glaciteSpent =
+      getFirstNumber(miningCore, ["powder_spent_glacite", "glacite_powder_spent"]) ?? 0;
+    const glaciteTotal =
+      getFirstNumber(miningCore, ["powder_glacite", "glacite_powder"]) ?? (glaciteCurrent + glaciteSpent);
+
+    const hotmXp =
+      getPath(skillTree, "experience.mining") ??
+      getFirstNumber(miningCore, ["experience", "hotm_xp", "hotmXp", "hotm_experience", "hotmExperience"]);
+
+    let level = { level: 1, levelWithProgress: 1 };
+    if (typeof hotmXp === "number" && Number.isFinite(hotmXp)) {
+      level = getLevelByXp(hotmXp, { type: "hotm" });
+    }
+
+    const rawAbility =
+      miningCore.selected_pickaxe_ability ??
+      miningCore.selectedPickaxeAbility ??
+      miningCore.selected_ability ??
+      miningCore.selectedAbility ??
+      miningCore.ability ??
+      getPath(skillTree, "selected_ability.mining");
+
     return {
       powder: {
         mithril: {
-          spent: profile.mining_core.powder_spent_mithril ?? 0,
-          current: profile.mining_core.powder_mithril ?? 0,
-          total: (profile.mining_core.powder_spent_mithril ?? 0) + (profile.mining_core.powder_mithril ?? 0)
+          spent: mithrilSpent,
+          current: mithrilCurrent,
+          total: mithrilTotal
         },
         gemstone: {
-          spent: profile.mining_core.powder_spent_gemstone ?? 0,
-          current: profile.mining_core.powder_gemstone ?? 0,
-          total: (profile.mining_core.powder_spent_gemstone ?? 0) + (profile.mining_core.powder_gemstone ?? 0)
+          spent: gemstoneSpent,
+          current: gemstoneCurrent,
+          total: gemstoneTotal
         },
         glacite: {
-          spent: profile.mining_core.powder_spent_glacite ?? 0,
-          current: profile.mining_core.powder_glacite ?? 0,
-          total: (profile.mining_core.powder_spent_glacite ?? 0) + (profile.mining_core.powder_glacite ?? 0)
+          spent: glaciteSpent,
+          current: glaciteCurrent,
+          total: glaciteTotal
         }
       },
-      level: getLevelByXp(profile.mining_core.experience, { type: "hotm" }),
+      level,
       // @ts-ignore
-      ability: CONSTANTS.hotm.perks[profile.mining_core.selected_pickaxe_ability]?.name ?? "None"
+      ability: formatAbility(rawAbility)
     };
   } catch (error) {
     console.error(error);

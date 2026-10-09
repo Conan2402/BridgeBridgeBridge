@@ -8,6 +8,13 @@ const { getBestiaryConstants } = require("../constants/bestiary.js");
 
 /** @type {Partial<BestiaryConstants | null>} */
 let BESTIARY_CONSTANTS = {};
+
+function asArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return [];
+}
+
 async function updateConstants() {
   BESTIARY_CONSTANTS = await getBestiaryConstants();
 }
@@ -17,7 +24,7 @@ updateConstants();
 
 /**
  * @param {import("../../types/profiles.js").Member['bestiary']} bestiary
- * @param {Mob[]} categoryMobs
+ * @param {Mob[] | Record<string, Mob>} categoryMobs
  */
 function formatMobs(bestiary, categoryMobs) {
   if (!BESTIARY_CONSTANTS?.brackets) {
@@ -25,10 +32,11 @@ function formatMobs(bestiary, categoryMobs) {
   }
 
   const result = [];
-  for (const mob of categoryMobs) {
-    const mobBracket = BESTIARY_CONSTANTS.brackets[mob.bracket];
+  for (const mob of asArray(categoryMobs)) {
+    const mobBracket = BESTIARY_CONSTANTS.brackets[mob.bracket] ?? [];
 
-    const totalKills = bestiary ? mob.mobs.reduce((a, b) => a + (bestiary?.kills?.[b] || 0), 0) : 0;
+    const mobKills = asArray(mob.mobs);
+    const totalKills = bestiary ? mobKills.reduce((a, b) => a + (bestiary?.kills?.[b] || 0), 0) : 0;
     const nextTierKills = mobBracket.find((tier) => totalKills < tier && tier <= mob.cap);
     const currentTier = nextTierKills ? mobBracket.indexOf(nextTierKills) : mobBracket.indexOf(mob.cap) + 1;
     const nextTier = nextTierKills ? nextTierKills - totalKills : null;
