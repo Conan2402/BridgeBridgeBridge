@@ -505,11 +505,47 @@ async function calculateRunsUntilClassLevel(
   };
 }
 
-async function calculateRunsUntilClassAverage(dungeons, floor, memberProfile, targetAverage = 50) {
+async function calculateRunsUntilClassAverage(
+  dungeons,
+  floor,
+  memberProfile,
+  targetAverage = 50,
+  playingClass = null
+) {
   const targetXp = getDungeonXpForLevel(targetAverage);
   const classXpLeft = CLASSES.map((cls) => Math.max(targetXp - getClassXp(dungeons, cls), 0));
-
   const { classPerRun } = await getDungeonRunRates(dungeons, floor, memberProfile);
+
+  const forcedClass =
+    playingClass && typeof playingClass === "object"
+      ? playingClass
+      : getClassDefinition(playingClass);
+
+  if (playingClass && !forcedClass) {
+    throw new Error("Unknown class.");
+  }
+
+  if (forcedClass) {
+    const runsPerClass = CLASSES.map((cls, index) => {
+      const gainPerRun =
+        classPerRun[cls.short] * (cls.short === forcedClass.short ? 1 : 0.25);
+
+      if (!Number.isFinite(gainPerRun) || gainPerRun <= 0) {
+        return Infinity;
+      }
+
+      return Math.max(Math.ceil(classXpLeft[index] / gainPerRun), 0);
+    });
+
+    return {
+      totalRuns: Math.max(...runsPerClass),
+      runsPerClass,
+      targetXp,
+      classPerRun,
+      playingClass: forcedClass.key,
+      mode: "fixedClass",
+    };
+  }
 
   const runsPerClass = [0, 0, 0, 0, 0];
 
@@ -556,6 +592,7 @@ async function calculateRunsUntilClassAverage(dungeons, floor, memberProfile, ta
     runsPerClass,
     targetXp,
     classPerRun,
+    mode: "optimal",
   };
 }
 
