@@ -77,7 +77,9 @@ class warpoutCommand extends minecraftCommand {
         if (message.includes("You cannot join SkyBlock from here!") || message.includes("Use /lobby first!")) {
           finish({
             success: false,
-            reason: "SkyBlock join failed: not in a valid lobby."
+            reason: "SkyBlock join failed: not in a valid lobby.",
+            retryable: true,
+            retryAction: "lobby"
           });
           return;
         }
@@ -87,6 +89,7 @@ class warpoutCommand extends minecraftCommand {
             success: false,
             reason: "SkyBlock join failed: commands too fast."
           });
+          return;
         }
       };
 
@@ -135,6 +138,7 @@ class warpoutCommand extends minecraftCommand {
             success: false,
             reason: `SkyBlock join failed: disconnect packet (${JSON.stringify(data)}).`
           });
+          return;
         }
       };
 
@@ -153,14 +157,17 @@ class warpoutCommand extends minecraftCommand {
       };
 
       const timeout = setTimeout(() => {
+        console.log("Minecraft > SkyBlock join timeout:", {
+          state: bot?._client?.state ?? "unknown",
+          sawConfiguration,
+          sawSkyblockTransferMessage,
+          sawResourcePack
+        });
+
         finish({
           success: false,
-          reason:
-            `SkyBlock join failed: timeout. ` +
-            `state=${bot?._client?.state ?? "unknown"}, ` +
-            `sawConfiguration=${sawConfiguration}, ` +
-            `sawSkyblockTransferMessage=${sawSkyblockTransferMessage}, ` +
-            `sawResourcePack=${sawResourcePack}.`
+          reason: "SkyBlock join failed: timeout.",
+          retryable: false
         });
       }, timeoutMs);
 
@@ -200,6 +207,18 @@ class warpoutCommand extends minecraftCommand {
       return true;
     };
 
+    const joinSkyblockOnce = async () => {
+      if (typeof bot.armSkyblockResourcePackAcceptance === "function") {
+        bot.armSkyblockResourcePackAcceptance(45000);
+      } else {
+        console.warn("Minecraft > bot.armSkyblockResourcePackAcceptance is not available.");
+      }
+
+      const skyblockJoinPromise = this.waitForSkyBlockJoin(45000);
+      safeChat("/play skyblock");
+      return await skyblockJoinPromise;
+    };
+
     try {
       if (this.isOnCooldown) {
         return safeSend(`${player} Command is on cooldown`);
@@ -210,6 +229,7 @@ class warpoutCommand extends minecraftCommand {
       const user = this.getArgs(message)[0];
 
       if (user === undefined) {
+        this.isOnCooldown = false;
         throw "Please provide a username!";
       }
 
@@ -227,22 +247,26 @@ class warpoutCommand extends minecraftCommand {
         return safeSend(`SkyBlock join failed: bot left play state after /lobby megawalls. state=${bot?._client?.state ?? "unknown"}`);
       }
 
-      if (typeof bot.armSkyblockResourcePackAcceptance === "function") {
-        bot.armSkyblockResourcePackAcceptance(45000);
-      } else {
-        console.warn("Minecraft > bot.armSkyblockResourcePackAcceptance is not available.");
+      let skyblockJoinResult = await joinSkyblockOnce();
+
+      if (!skyblockJoinResult.success && skyblockJoinResult.retryAction === "lobby") {
+        console.log("Minecraft > Not in a valid lobby, retrying via /lobby ...");
+        safeChat("/lobby");
+
+        await delay(1500);
+
+        if (!bot || !bot._client || bot._client.state !== "play") {
+          this.isOnCooldown = false;
+          return safeSend(`SkyBlock join failed: bot left play state after /lobby. state=${bot?._client?.state ?? "unknown"}`);
+        }
+
+        skyblockJoinResult = await joinSkyblockOnce();
       }
-
-      const skyblockJoinPromise = this.waitForSkyBlockJoin(45000);
-
-      safeChat("/play skyblock");
-
-      const skyblockJoinResult = await skyblockJoinPromise;
 
       if (!skyblockJoinResult.success) {
         this.isOnCooldown = false;
         console.log("Minecraft > SkyBlock join failed:", stringifyResult(skyblockJoinResult));
-        safeSend(skyblockJoinResult.reason);
+        safeSend("SkyBlock join failed.");
         return;
       }
 

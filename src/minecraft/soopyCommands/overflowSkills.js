@@ -32,7 +32,7 @@ const BASE_CAPS = {
   alchemy: 50,
   taming: 60,
   carpentry: 50,
-  hunting: 25
+  hunting: 50
 };
 
 function sanitizeNumber(value) {
